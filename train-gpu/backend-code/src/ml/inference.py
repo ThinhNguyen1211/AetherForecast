@@ -13,7 +13,14 @@ import torch
 from src.core.config import get_settings
 from src.data.sentiment import SentimentScorer
 from src.ml.model_loader import LoadedForecastModel, get_loaded_forecasting_model
-from src.ml.schemas import ConfidenceBand, ConfidenceInterval, PredictRequest, PredictResponse
+from src.ml.schemas import (
+    ConfidenceBand,
+    ConfidenceInterval,
+    PatternMarker,
+    PredictRequest,
+    PredictResponse,
+    VolatilityBand,
+)
 
 logger = logging.getLogger(__name__)
 NUMERIC_REGEX = re.compile(r"-?\d+(?:\.\d+)?")
@@ -58,75 +65,196 @@ class ForecastInferenceService:
         adjustment = 1.0 + bounded * 0.002
         return forecast * adjustment
 
-    def _pattern_signal_series(self, request: PredictRequest) -> np.ndarray:
+    def _pattern_signal_series(self, request: PredictRequest) -> tuple[np.ndarray, dict[str, np.ndarray]]:
         opens = np.asarray([float(item.open) for item in request.latest_candles], dtype=np.float64)
         highs = np.asarray([float(item.high) for item in request.latest_candles], dtype=np.float64)
         lows = np.asarray([float(item.low) for item in request.latest_candles], dtype=np.float64)
         closes = np.asarray([float(item.close) for item in request.latest_candles], dtype=np.float64)
 
         if closes.size == 0:
-            return np.asarray([], dtype=np.float64)
+            return np.asarray([], dtype=np.float64), {}
+
+        patterns: dict[str, np.ndarray] = {}
 
         if talib is not None:
             try:
-                doji = talib.CDLDOJI(opens, highs, lows, closes)
-                engulfing = talib.CDLENGULFING(opens, highs, lows, closes)
-                hammer = talib.CDLHAMMER(opens, highs, lows, closes)
-                # Normalize strong candlestick events to a compact range.
-                combined = doji * 0.3 + engulfing * 0.5 + hammer * 0.2
-                return np.tanh(combined / 100.0)
+                patterns = {
+                    "doji": np.tanh(talib.CDLDOJI(opens, highs, lows, closes).astype(np.float64) / 100.0),
+                    "engulfing": np.tanh(talib.CDLENGULFING(opens, highs, lows, closes).astype(np.float64) / 100.0),
+                    "hammer": np.tanh(talib.CDLHAMMER(opens, highs, lows, closes).astype(np.float64) / 100.0),
+                    "shooting_star": np.tanh(
+                        talib.CDLSHOOTINGSTAR(opens, highs, lows, closes).astype(np.float64) / 100.0
+                    ),
+                    "morning_star": np.tanh(
+                        talib.CDLMORNINGSTAR(opens, highs, lows, closes).astype(np.float64) / 100.0
+                    ),
+                    "evening_star": np.tanh(
+                        talib.CDLEVENINGSTAR(opens, highs, lows, closes).astype(np.float64) / 100.0
+                    ),
+                    "hanging_man": np.tanh(
+                        talib.CDLHANGINGMAN(opens, highs, lows, closes).astype(np.float64) / 100.0
+                    ),
+                }
             except Exception as exc:
                 logger.warning("TA-Lib pattern extraction failed in inference: %s", exc)
 
-        candle_range = np.maximum(highs - lows, 1e-8)
-        body = np.abs(closes - opens)
-        lower_shadow = np.minimum(opens, closes) - lows
-        doji = (body / candle_range < 0.1).astype(np.float64)
-        hammer = (lower_shadow / candle_range > 0.55).astype(np.float64)
-        engulfing = np.sign(closes - opens).astype(np.float64)
-        return np.tanh(doji * 0.2 + hammer * 0.3 + engulfing * 0.5)
+        if not patterns:
+            candle_range = np.maximum(highs - lows, 1e-8)
+            body = np.abs(closes - opens)
+            upper_shadow = highs - np.maximum(opens, closes)
+            lower_shadow = np.minimum(opens, closes) - lows
+
+            doji = np.where(body / candle_range < 0.1, 1.0, 0.0)
+            hammer = np.where(
+                (lower_shadow / candle_range > 0.55) & (upper_shadow / candle_range < 0.2),
+                np.sign(closes - opens),
+                0.0,
+            )
+            shooting_star = np.where(
+                (upper_shadow / candle_range > 0.55) & (lower_shadow / candle_range < 0.2),
+                -np.sign(closes - opens),
+                0.0,
+            )
+
+            prev_open = np.roll(opens, 1)
+            prev_close = np.roll(closes, 1)
+            bullish_engulf = (
+                (closes > opens)
+                & (prev_close < prev_open)
+                & (closes >= prev_open)
+                & (opens <= prev_close)
+            )
+            bearish_engulf = (
+                (closes < opens)
+                & (prev_close > prev_open)
+                & (opens >= prev_close)
+                & (closes <= prev_open)
+            )
+            engulfing = bullish_engulf.astype(np.float64) - bearish_engulf.astype(np.float64)
+            engulfing[0] = 0.0
+
+            morning_star = np.zeros_like(closes, dtype=np.float64)
+            evening_star = np.zeros_like(closes, dtype=np.float64)
+            for idx in range(2, closes.size):
+                first_bearish = closes[idx - 2] < opens[idx - 2]
+                first_bullish = closes[idx - 2] > opens[idx - 2]
+                small_middle = abs(closes[idx - 1] - opens[idx - 1]) <= 0.35 * (highs[idx - 1] - lows[idx - 1] + 1e-8)
+                strong_bull = closes[idx] > opens[idx] and closes[idx] >= (opens[idx - 2] + closes[idx - 2]) / 2.0
+                strong_bear = closes[idx] < opens[idx] and closes[idx] <= (opens[idx - 2] + closes[idx - 2]) / 2.0
+
+                if first_bearish and small_middle and strong_bull:
+                    morning_star[idx] = 1.0
+                if first_bullish and small_middle and strong_bear:
+                    evening_star[idx] = -1.0
+
+            hanging_man = np.zeros_like(closes, dtype=np.float64)
+            for idx in range(3, closes.size):
+                uptrend = closes[idx - 1] > closes[idx - 3]
+                if uptrend and lower_shadow[idx] / candle_range[idx] > 0.55 and upper_shadow[idx] / candle_range[idx] < 0.2:
+                    hanging_man[idx] = -1.0
+
+            patterns = {
+                "doji": np.tanh(doji),
+                "engulfing": np.tanh(engulfing),
+                "hammer": np.tanh(hammer),
+                "shooting_star": np.tanh(shooting_star),
+                "morning_star": np.tanh(morning_star),
+                "evening_star": np.tanh(evening_star),
+                "hanging_man": np.tanh(hanging_man),
+            }
+
+        # Blend a richer set of candlestick patterns into one compact signal.
+        weights = {
+            "engulfing": 0.30,
+            "hammer": 0.15,
+            "shooting_star": 0.15,
+            "morning_star": 0.14,
+            "evening_star": 0.14,
+            "hanging_man": 0.08,
+            "doji": 0.04,
+        }
+        combined = np.zeros_like(closes, dtype=np.float64)
+        for name, weight in weights.items():
+            if name in patterns:
+                combined += patterns[name] * weight
+
+        return np.tanh(combined), patterns
+
+    def _realized_volatility_series(self, closes: np.ndarray) -> dict[str, np.ndarray]:
+        if closes.size == 0:
+            return {}
+
+        returns = np.zeros_like(closes, dtype=np.float64)
+        if closes.size > 1:
+            returns[1:] = np.diff(np.log(np.maximum(closes, 1e-8)))
+
+        series = pd.Series(returns, dtype="float64")
+        output: dict[str, np.ndarray] = {}
+        for window in (5, 10, 20, 40, 80):
+            output[str(window)] = series.rolling(window=window, min_periods=2).std().fillna(0.0).to_numpy(dtype=np.float64)
+        return output
 
     def _build_context_series(
         self,
         request: PredictRequest,
         sentiment_score: float | None = None,
         external_sentiment_score: float | None = None,
-    ) -> list[float]:
+    ) -> dict[str, Any]:
         closes = np.asarray([float(item.close) for item in request.latest_candles], dtype=np.float64)
-        returns = np.diff(closes) / np.maximum(closes[:-1], 1e-8) if closes.size > 1 else np.asarray([])
-        pattern_signal = self._pattern_signal_series(request)
+        volumes = np.asarray([float(item.volume) for item in request.latest_candles], dtype=np.float64)
+        returns = np.zeros_like(closes, dtype=np.float64)
+        if closes.size > 1:
+            returns[1:] = np.diff(closes) / np.maximum(closes[:-1], 1e-8)
+
+        pattern_signal, pattern_signals = self._pattern_signal_series(request)
+        volatility = self._realized_volatility_series(closes)
 
         context: list[float] = []
+        volume_log = np.log1p(np.maximum(volumes, 0.0))
+        volume_mean = pd.Series(volume_log).rolling(window=20, min_periods=2).mean().fillna(method="bfill").fillna(0.0).to_numpy(dtype=np.float64)
+        volume_std = pd.Series(volume_log).rolling(window=20, min_periods=2).std().fillna(1.0).to_numpy(dtype=np.float64)
+        volume_z = (volume_log - volume_mean) / np.maximum(volume_std, 1e-6)
 
-        for index, candle in enumerate(request.latest_candles):
-            typical_price = (candle.open + candle.high + candle.low + candle.close) / 4.0
-            volume_feature = math.log1p(max(candle.volume, 0.0)) * 0.0001
+        momentum_3 = (
+            pd.Series(returns, dtype="float64")
+            .rolling(window=3, min_periods=1)
+            .mean()
+            .fillna(0.0)
+            .to_numpy(dtype=np.float64)
+        )
 
-            # Include volatility and TA-Lib candlestick pattern signals in model context.
-            start = max(0, index - 20)
-            window_returns = returns[start:index] if returns.size > 0 else np.asarray([])
-            volatility = float(np.std(window_returns)) if window_returns.size > 1 else 0.0
-            volatility_feature = max(-0.002, min(0.002, volatility * 0.05))
+        vol_5 = volatility.get("5", np.zeros_like(closes, dtype=np.float64))
+        vol_20 = volatility.get("20", np.zeros_like(closes, dtype=np.float64))
+        vol_80 = volatility.get("80", np.zeros_like(closes, dtype=np.float64))
+        vol_regime = (vol_5 - vol_20) / np.maximum(vol_80, 1e-6)
 
-            pattern_feature = 0.0
-            if index < pattern_signal.size:
-                pattern_feature = float(pattern_signal[index]) * 0.001
+        sentiment_feature = 0.0
+        if sentiment_score is not None:
+            sentiment_feature += max(-1.0, min(1.0, float(sentiment_score))) * 0.006
+        if external_sentiment_score is not None:
+            sentiment_feature += max(-1.0, min(1.0, float(external_sentiment_score))) * 0.009
 
-            sentiment_feature = 0.0
-            if sentiment_score is not None:
-                sentiment_feature += max(-1.0, min(1.0, float(sentiment_score))) * 0.0008
-            if external_sentiment_score is not None:
-                sentiment_feature += max(-1.0, min(1.0, float(external_sentiment_score))) * 0.0012
-
-            context.append(
-                float(
-                    typical_price
-                    * (1.0 + volume_feature + volatility_feature + pattern_feature + sentiment_feature)
-                )
+        for index, close in enumerate(closes):
+            pattern_feature = float(pattern_signal[index]) if index < pattern_signal.size else 0.0
+            adjustment = (
+                np.tanh(volume_z[index]) * 0.004
+                + np.tanh(momentum_3[index] * 45.0) * 0.017
+                + np.tanh(vol_regime[index] * 0.9) * 0.034
+                + pattern_feature * 0.021
+                + sentiment_feature
             )
+            adjustment = float(max(-0.12, min(0.12, adjustment)))
+            context.append(float(close * (1.0 + adjustment)))
 
         # Keep context compact for low-latency CPU inference in Fargate.
-        return context[-512:]
+        return {
+            "context": context[-512:],
+            "closes": closes,
+            "returns": returns,
+            "pattern_signal": pattern_signal,
+            "pattern_signals": pattern_signals,
+            "volatility": volatility,
+        }
 
     def _estimate_sentiment_score(
         self,
@@ -353,6 +481,182 @@ class ForecastInferenceService:
 
             return self._as_sample_matrix(text, horizon)
 
+    def _recent_step_volatility(self, closes: np.ndarray, window: int) -> float:
+        if closes.size < 3:
+            return 0.0
+
+        log_returns = np.diff(np.log(np.maximum(closes, 1e-8)))
+        if log_returns.size < 2:
+            return 0.0
+
+        scoped = log_returns[-window:] if log_returns.size > window else log_returns
+        if scoped.size < 2:
+            return 0.0
+
+        return float(np.std(scoped))
+
+    def _postprocess_quantile_variance(
+        self,
+        quantile_values: dict[float, np.ndarray],
+        closes: np.ndarray,
+        sentiment_score: float,
+        external_sentiment_score: float,
+    ) -> dict[float, np.ndarray]:
+        if 0.5 not in quantile_values:
+            return quantile_values
+
+        median = np.asarray(quantile_values[0.5], dtype=np.float64)
+        if median.size < 2:
+            return quantile_values
+
+        safe_median = np.maximum(median, 1e-8)
+        predicted_returns = np.diff(np.log(safe_median))
+        predicted_vol = float(np.std(predicted_returns)) if predicted_returns.size > 1 else 0.0
+
+        hist_fast = self._recent_step_volatility(closes, window=20)
+        hist_slow = self._recent_step_volatility(closes, window=60)
+        hist_blended = max(1e-6, hist_fast * 0.65 + hist_slow * 0.35)
+
+        target_vol = float(np.clip(hist_blended * 0.90, 0.0006, 0.0600))
+        min_required = target_vol * 0.45
+        if predicted_vol >= min_required:
+            return quantile_values
+
+        base_returns = predicted_returns.copy()
+        if base_returns.size == 0:
+            base_returns = np.zeros(median.size - 1, dtype=np.float64)
+        elif base_returns.size < median.size - 1:
+            base_returns = np.pad(base_returns, (0, median.size - 1 - base_returns.size), mode="edge")
+
+        recent_log_returns = np.diff(np.log(np.maximum(closes[-12:], 1e-8))) if closes.size > 12 else np.asarray([])
+        trend_bias = float(np.mean(recent_log_returns)) if recent_log_returns.size > 0 else 0.0
+
+        bounded_sentiment = max(-1.0, min(1.0, float(sentiment_score)))
+        bounded_external = max(-1.0, min(1.0, float(external_sentiment_score)))
+        sentiment_bias = (bounded_sentiment * 0.25 + bounded_external * 0.35) * target_vol
+
+        desired_vol = float(np.clip(min_required + (target_vol - min_required) * 0.85, min_required, target_vol * 1.30))
+        wave_amplitude = math.sqrt(max(desired_vol**2 - predicted_vol**2, 0.0))
+
+        steps = np.arange(1, median.size, dtype=np.float64)
+        period = float(max(4, min(10, median.size)))
+        wave = np.sin((2.0 * np.pi * steps) / period) + 0.5 * np.sin((4.0 * np.pi * steps) / period + np.pi / 7.0)
+        wave_std = float(np.std(wave))
+        if wave_std > 1e-8:
+            wave = wave / wave_std
+
+        adjusted_returns = base_returns.copy()
+        adjusted_returns += wave * wave_amplitude * 0.90
+        adjusted_returns += (trend_bias + sentiment_bias) * 0.35
+        adjusted_returns = np.clip(adjusted_returns, -0.25, 0.25)
+
+        variance_adjusted = np.empty_like(median)
+        variance_adjusted[0] = max(1e-8, median[0])
+        for idx in range(1, median.size):
+            variance_adjusted[idx] = max(1e-8, variance_adjusted[idx - 1] * math.exp(float(adjusted_returns[idx - 1])))
+
+        median_updated = np.maximum(median * 0.30 + variance_adjusted * 0.70, 1e-8)
+        spread_scale = float(np.clip(desired_vol / max(predicted_vol, 1e-6), 1.10, 3.00))
+
+        recentered: dict[float, np.ndarray] = {}
+        for quantile, values in quantile_values.items():
+            series = np.asarray(values, dtype=np.float64)
+            if series.shape[0] > median.shape[0]:
+                series = series[: median.shape[0]]
+            elif series.shape[0] < median.shape[0]:
+                series = np.pad(series, (0, median.shape[0] - series.shape[0]), mode="edge")
+
+            if quantile == 0.5:
+                recentered[quantile] = median_updated
+            else:
+                recentered[quantile] = np.maximum(1e-8, median_updated + (series - median) * spread_scale)
+
+        ordered_quantiles = sorted(recentered.keys())
+        stack = np.vstack([recentered[quantile] for quantile in ordered_quantiles])
+        stack = np.sort(stack, axis=0)
+        for index, quantile in enumerate(ordered_quantiles):
+            quantile_values[quantile] = stack[index]
+
+        return quantile_values
+
+    def _build_pattern_markers(
+        self,
+        request: PredictRequest,
+        pattern_signals: dict[str, np.ndarray],
+    ) -> list[PatternMarker]:
+        if not pattern_signals:
+            return []
+
+        markers: list[PatternMarker] = []
+        candle_count = len(request.latest_candles)
+        start_index = max(0, candle_count - 220)
+
+        for index in range(start_index, candle_count):
+            strongest_name = ""
+            strongest_value = 0.0
+
+            for name, values in pattern_signals.items():
+                if index >= values.size:
+                    continue
+                value = float(values[index])
+                if abs(value) < 0.45:
+                    continue
+                if abs(value) > abs(strongest_value):
+                    strongest_name = name
+                    strongest_value = value
+
+            if not strongest_name:
+                continue
+
+            if strongest_value > 0.12:
+                direction = "bullish"
+            elif strongest_value < -0.12:
+                direction = "bearish"
+            else:
+                direction = "neutral"
+
+            markers.append(
+                PatternMarker(
+                    timestamp=request.latest_candles[index].timestamp,
+                    pattern=strongest_name,
+                    direction=direction,
+                    strength=round(strongest_value, 4),
+                )
+            )
+
+        return markers[-40:]
+
+    def _build_volatility_bands(
+        self,
+        median_forecast: np.ndarray,
+        volatility: dict[str, np.ndarray],
+    ) -> list[VolatilityBand]:
+        if median_forecast.size == 0 or not volatility:
+            return []
+
+        bands: list[VolatilityBand] = []
+        for label, key in (("rv20", "20"), ("rv40", "40")):
+            vol_series = volatility.get(key)
+            if vol_series is None or vol_series.size == 0:
+                continue
+
+            base_vol = float(vol_series[-1])
+            if not math.isfinite(base_vol):
+                continue
+            base_vol = float(np.clip(base_vol, 0.0004, 0.0800))
+
+            lower: list[float] = []
+            upper: list[float] = []
+            for step, value in enumerate(median_forecast, start=1):
+                price = float(max(1e-8, value))
+                width = max(price * base_vol * math.sqrt(step), price * 0.0008)
+                lower.append(round(max(1e-8, price - width), 8))
+                upper.append(round(price + width, 8))
+
+            bands.append(VolatilityBand(label=label, lower=lower, upper=upper))
+
+        return bands
+
     def predict(self, request: PredictRequest) -> PredictResponse:
         closes = [float(candle.close) for candle in request.latest_candles]
         if len(closes) < 20:
@@ -371,11 +675,12 @@ class ForecastInferenceService:
             )
         )
 
-        context_series = self._build_context_series(
+        feature_bundle = self._build_context_series(
             request,
             sentiment_score=sentiment_score,
             external_sentiment_score=external_sentiment_score,
         )
+        context_series = feature_bundle["context"]
 
         try:
             loaded_model = self._load_model()
@@ -419,11 +724,15 @@ class ForecastInferenceService:
                     for quantile in list(quantile_values.keys()):
                         quantile_values[quantile] = quantile_values[quantile] * adjustment
 
+            quantile_values = self._postprocess_quantile_variance(
+                quantile_values,
+                closes=np.asarray(feature_bundle["closes"], dtype=np.float64),
+                sentiment_score=sentiment_score,
+                external_sentiment_score=external_sentiment_score,
+            )
+
             model_name = loaded_model.model_name
             model_version = loaded_model.model_version
-            model_requested_source = loaded_model.requested_source
-            model_effective_source = loaded_model.effective_source
-            model_torch_dtype = loaded_model.torch_dtype
         except Exception as exc:
             logger.exception("Chronos inference failed for model_s3_uri=%s", self.settings.model_s3_uri)
             raise RuntimeError(f"Chronos model load/inference failed: {exc}") from exc
@@ -466,17 +775,18 @@ class ForecastInferenceService:
             )
             for quantile in quantiles
         ]
+        pattern_markers = self._build_pattern_markers(
+            request,
+            pattern_signals=feature_bundle.get("pattern_signals", {}),
+        )
+        volatility_bands = self._build_volatility_bands(
+            median_forecast=median_forecast,
+            volatility=feature_bundle.get("volatility", {}),
+        )
 
-        requested = (model_requested_source or "").rstrip("/")
-        effective = (model_effective_source or "").rstrip("/")
-        if requested and effective and requested != effective:
-            model_origin = f"requested={requested}, promoted={effective}"
-        else:
-            model_origin = f"source={effective or requested}"
-
-        model_runtime = f"Hugging Face Chronos model {model_name}:{model_version} (dtype={model_torch_dtype}, {model_origin})"
         explanation = (
-            f"Forecast generated by {model_runtime}. "
+            "Forecast blends Chronos inference with live candlestick patterns, "
+            "multi-window realized volatility, and external sentiment. "
             f"Horizon={horizon}, {forecast_detail}, volatility={volatility:.6f}, "
             f"sentiment={sentiment_score:.3f} ({sentiment_source}), "
             f"external={external_sentiment_score:.3f} ({external_sentiment_source})."
@@ -491,6 +801,8 @@ class ForecastInferenceService:
             confidence=round(float(confidence), 4),
             confidence_interval=first_interval,
             confidence_bands=confidence_bands,
+            volatility_bands=volatility_bands,
+            pattern_markers=pattern_markers,
             sentiment_score=round(float(sentiment_score), 4),
             sentiment_source=sentiment_source,
             external_sentiment_score=round(float(external_sentiment_score), 4),

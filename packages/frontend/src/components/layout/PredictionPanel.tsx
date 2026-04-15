@@ -197,13 +197,14 @@ export default function PredictionPanel({
         {loading ? "Generating forecast..." : "Generate prediction"}
       </button>
 
-      <div className="mt-4 rounded-xl border border-violet-400/20 bg-cosmic-900/45 p-3">
-        <p className="muted-label">Model Note</p>
-        <p className="mt-1 text-sm leading-6 text-violet-100/90">
-          {prediction?.explanation ??
-            "Prediction uses backend ML inference endpoint and overlays output onto chart projection."}
+      <details className="mt-4 rounded-xl border border-violet-400/20 bg-cosmic-900/45 p-3">
+        <summary className="cursor-pointer text-sm font-semibold text-violet-100/90">Model Note</summary>
+        <p className="mt-2 text-sm leading-6 text-violet-100/80">
+          {prediction
+            ? `Forecast blends live candles, candlestick patterns, volatility context, and external sentiment. Expected move is projected over ${effectiveBars} bars with current confidence ${(prediction.confidence * 100).toFixed(1)}%.`
+            : "Run a prediction to see an expanded model note."}
         </p>
-      </div>
+      </details>
     </section>
   );
 }

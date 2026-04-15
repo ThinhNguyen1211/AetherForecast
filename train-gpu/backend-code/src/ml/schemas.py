@@ -35,6 +35,19 @@ class ConfidenceBand(BaseModel):
     values: list[float] = Field(min_length=1)
 
 
+class VolatilityBand(BaseModel):
+    label: str
+    lower: list[float] = Field(min_length=1)
+    upper: list[float] = Field(min_length=1)
+
+
+class PatternMarker(BaseModel):
+    timestamp: datetime
+    pattern: str
+    direction: Literal["bullish", "bearish", "neutral"]
+    strength: float = Field(ge=-1.0, le=1.0)
+
+
 class PredictResponse(BaseModel):
     symbol: str
     timeframe: SupportedTimeframe
@@ -44,6 +57,8 @@ class PredictResponse(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     confidence_interval: ConfidenceInterval
     confidence_bands: list[ConfidenceBand] = Field(min_length=1)
+    volatility_bands: list[VolatilityBand] = Field(default_factory=list)
+    pattern_markers: list[PatternMarker] = Field(default_factory=list)
     sentiment_score: float = Field(ge=-1.0, le=1.0)
     sentiment_source: str
     external_sentiment_score: float = Field(ge=-1.0, le=1.0)

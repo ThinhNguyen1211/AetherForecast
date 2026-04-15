@@ -7,11 +7,12 @@ import {
   LineData,
   LineStyle,
   LogicalRange,
+  SeriesMarker,
   UTCTimestamp,
   createChart,
 } from "lightweight-charts";
 
-import { Candle, PredictResponse } from "@/services/api";
+import { Candle, PatternMarker as ApiPatternMarker, PredictResponse } from "@/services/api";
 
 interface TradingChartProps {
   symbol: string;
@@ -263,6 +264,47 @@ function calculateMacd(candles: Candle[]): {
   return { signal, histogram };
 }
 
+function toPatternMarkerLabel(pattern: string): string {
+  const normalized = pattern.replace(/_/g, " ").trim();
+  if (!normalized) {
+    return "Pattern";
+  }
+  return normalized
+    .split(" ")
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
+}
+
+function toSeriesMarker(marker: ApiPatternMarker): SeriesMarker<UTCTimestamp> {
+  if (marker.direction === "bullish") {
+    return {
+      time: toUnix(marker.timestamp),
+      position: "belowBar",
+      color: "#00e6d2",
+      shape: "arrowUp",
+      text: toPatternMarkerLabel(marker.pattern),
+    };
+  }
+
+  if (marker.direction === "bearish") {
+    return {
+      time: toUnix(marker.timestamp),
+      position: "aboveBar",
+      color: "#ff5a8e",
+      shape: "arrowDown",
+      text: toPatternMarkerLabel(marker.pattern),
+    };
+  }
+
+  return {
+    time: toUnix(marker.timestamp),
+    position: "inBar",
+    color: "#f8c13a",
+    shape: "circle",
+    text: toPatternMarkerLabel(marker.pattern),
+  };
+}
+
 export default function TradingChart({
   symbol,
   candles,
@@ -291,6 +333,10 @@ export default function TradingChart({
   const predictionLineSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
   const predictionUpperSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
   const predictionLowerSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
+  const volatilityUpperSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
+  const volatilityLowerSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
+  const volatilityUpperSecondarySeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
+  const volatilityLowerSecondarySeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
 
   const rsiSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
   const macdHistogramRef = useRef<ReturnType<IChartApi["addHistogramSeries"]> | null>(null);
@@ -307,8 +353,9 @@ export default function TradingChart({
   const loadOlderCallbackRef = useRef<((oldestTimestamp: string) => void) | null>(null);
   const loadingOlderRef = useRef(false);
   const syncOverlayTimeoutRef = useRef<number | null>(null);
-  const [syncOverlayVisible, setSyncOverlayVisible] = useState(isSyncing);
   const normalizedInputCandles = useMemo(() => sanitizeCandles(candles), [candles]);
+  const isPrimarySyncing = isSyncing && normalizedInputCandles.length === 0;
+  const [syncOverlayVisible, setSyncOverlayVisible] = useState(isPrimarySyncing);
 
   useEffect(() => {
     if (syncOverlayTimeoutRef.current !== null) {
@@ -316,7 +363,7 @@ export default function TradingChart({
       syncOverlayTimeoutRef.current = null;
     }
 
-    if (isSyncing) {
+    if (isPrimarySyncing) {
       setSyncOverlayVisible(true);
       return;
     }
@@ -332,7 +379,7 @@ export default function TradingChart({
         syncOverlayTimeoutRef.current = null;
       }
     };
-  }, [isSyncing]);
+  }, [isPrimarySyncing]);
 
   useEffect(() => {
     normalizedCandlesRef.current = normalizedInputCandles;
@@ -438,6 +485,34 @@ export default function TradingChart({
     });
     predictionLowerSeriesRef.current = predictionLowerSeries;
 
+    const volatilityUpperSeries = mainChart.addLineSeries({
+      color: "rgba(255, 193, 7, 0.75)",
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+    });
+    volatilityUpperSeriesRef.current = volatilityUpperSeries;
+
+    const volatilityLowerSeries = mainChart.addLineSeries({
+      color: "rgba(255, 193, 7, 0.75)",
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+    });
+    volatilityLowerSeriesRef.current = volatilityLowerSeries;
+
+    const volatilityUpperSecondarySeries = mainChart.addLineSeries({
+      color: "rgba(255, 152, 0, 0.45)",
+      lineWidth: 1,
+      lineStyle: LineStyle.Dotted,
+    });
+    volatilityUpperSecondarySeriesRef.current = volatilityUpperSecondarySeries;
+
+    const volatilityLowerSecondarySeries = mainChart.addLineSeries({
+      color: "rgba(255, 152, 0, 0.45)",
+      lineWidth: 1,
+      lineStyle: LineStyle.Dotted,
+    });
+    volatilityLowerSecondarySeriesRef.current = volatilityLowerSecondarySeries;
+
     const rsiChart = createChart(rsiChartRef.current, {
       ...sharedOptions,
       height: 145,
@@ -516,6 +591,10 @@ export default function TradingChart({
       predictionLineSeriesRef.current = null;
       predictionUpperSeriesRef.current = null;
       predictionLowerSeriesRef.current = null;
+      volatilityUpperSeriesRef.current = null;
+      volatilityLowerSeriesRef.current = null;
+      volatilityUpperSecondarySeriesRef.current = null;
+      volatilityLowerSecondarySeriesRef.current = null;
       rsiSeriesRef.current = null;
       macdHistogramRef.current = null;
       macdSignalRef.current = null;
@@ -594,6 +673,10 @@ export default function TradingChart({
       !predictionLineSeriesRef.current ||
       !predictionUpperSeriesRef.current ||
       !predictionLowerSeriesRef.current ||
+      !volatilityUpperSeriesRef.current ||
+      !volatilityLowerSeriesRef.current ||
+      !volatilityUpperSecondarySeriesRef.current ||
+      !volatilityLowerSecondarySeriesRef.current ||
       !rsiSeriesRef.current ||
       !macdHistogramRef.current ||
       !macdSignalRef.current ||
@@ -612,6 +695,11 @@ export default function TradingChart({
       predictionLineSeriesRef.current.setData([]);
       predictionUpperSeriesRef.current.setData([]);
       predictionLowerSeriesRef.current.setData([]);
+      volatilityUpperSeriesRef.current.setData([]);
+      volatilityLowerSeriesRef.current.setData([]);
+      volatilityUpperSecondarySeriesRef.current.setData([]);
+      volatilityLowerSecondarySeriesRef.current.setData([]);
+      candleSeriesRef.current.setMarkers([]);
       rsiSeriesRef.current.setData([]);
       macdHistogramRef.current.setData([]);
       macdSignalRef.current.setData([]);
@@ -692,10 +780,54 @@ export default function TradingChart({
       predictionLineSeriesRef.current.setData(forecastSeries);
       predictionUpperSeriesRef.current.setData(upperSeries);
       predictionLowerSeriesRef.current.setData(lowerSeries);
+
+      const markers = [...(prediction.pattern_markers ?? [])]
+        .map((item) => toSeriesMarker(item))
+        .sort((left, right) => Number(left.time) - Number(right.time));
+      candleSeriesRef.current.setMarkers(markers);
+
+      const buildVolatilitySeries = (values: number[]): LineData<UTCTimestamp>[] => {
+        const series: LineData<UTCTimestamp>[] = [{ time: anchorTime, value: anchorClose }];
+        for (let index = 0; index < prediction.prediction_array.length; index += 1) {
+          const value =
+            index < values.length
+              ? values[index]
+              : values.length > 0
+                ? values[values.length - 1]
+                : anchorClose;
+          series.push({
+            time: (anchorTime + (index + 1) * stepSeconds) as UTCTimestamp,
+            value,
+          });
+        }
+        return series;
+      };
+
+      const volatilityBands = prediction.volatility_bands ?? [];
+      const primaryVolatilityBand = volatilityBands[0];
+      const secondaryVolatilityBand = volatilityBands[1];
+
+      volatilityUpperSeriesRef.current.setData(
+        primaryVolatilityBand ? buildVolatilitySeries(primaryVolatilityBand.upper) : [],
+      );
+      volatilityLowerSeriesRef.current.setData(
+        primaryVolatilityBand ? buildVolatilitySeries(primaryVolatilityBand.lower) : [],
+      );
+      volatilityUpperSecondarySeriesRef.current.setData(
+        secondaryVolatilityBand ? buildVolatilitySeries(secondaryVolatilityBand.upper) : [],
+      );
+      volatilityLowerSecondarySeriesRef.current.setData(
+        secondaryVolatilityBand ? buildVolatilitySeries(secondaryVolatilityBand.lower) : [],
+      );
     } else {
       predictionLineSeriesRef.current.setData([]);
       predictionUpperSeriesRef.current.setData([]);
       predictionLowerSeriesRef.current.setData([]);
+      volatilityUpperSeriesRef.current.setData([]);
+      volatilityLowerSeriesRef.current.setData([]);
+      volatilityUpperSecondarySeriesRef.current.setData([]);
+      volatilityLowerSecondarySeriesRef.current.setData([]);
+      candleSeriesRef.current.setMarkers([]);
     }
 
     rsiSeriesRef.current.setData(calculateRsi(normalizedInputCandles, 14));
@@ -821,7 +953,12 @@ export default function TradingChart({
         </div>
       )}
       <div ref={mainChartRef} className="h-[440px] rounded-xl border border-violet-400/25" />
-      {isLoadingOlder && <p className="px-1 text-xs text-cyan-200/75">Loading older candles...</p>}
+      {isLoadingOlder && (
+        <div className="flex items-center gap-2 px-1 text-[11px] text-cyan-200/70">
+          <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-cyan-300/90" />
+          <span>Loading older candles...</span>
+        </div>
+      )}
       <div className="muted-label px-1">RSI (14)</div>
       <div ref={rsiChartRef} className="h-[145px] rounded-xl border border-violet-400/25" />
       <div className="muted-label px-1">MACD (12,26,9)</div>

@@ -511,7 +511,8 @@ export default function Dashboard() {
     hasMoreHistoryRef.current = true;
     lastLazyLoadAnchorRef.current = null;
     setLoadingOlderCandles(false);
-  }, [symbol, timeframe]);
+    setChartCandles([]);
+  }, [symbol, timeframe, setChartCandles]);
 
   useEffect(() => {
     if (!token || !symbol) {
@@ -724,7 +725,7 @@ export default function Dashboard() {
               predictionAnchor={predictionAnchor}
               onRequestOlderCandles={loadOlderCandles}
               isLoadingOlder={loadingOlderCandles}
-              isSyncing={loadingChart || loadingOlderCandles || wsStatus === "connecting"}
+              isSyncing={loadingChart || (wsStatus === "connecting" && chartCandles.length === 0)}
               isPredicting={loadingPrediction}
             />
           </section>

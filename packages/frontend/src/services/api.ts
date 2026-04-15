@@ -37,6 +37,19 @@ export interface ConfidenceBand {
   values: number[];
 }
 
+export interface VolatilityBand {
+  label: string;
+  lower: number[];
+  upper: number[];
+}
+
+export interface PatternMarker {
+  timestamp: string;
+  pattern: string;
+  direction: "bullish" | "bearish" | "neutral";
+  strength: number;
+}
+
 export interface PredictResponse {
   symbol: string;
   timeframe: Timeframe;
@@ -53,6 +66,8 @@ export interface PredictResponse {
     upper: number;
   };
   confidence_bands: ConfidenceBand[];
+  volatility_bands: VolatilityBand[];
+  pattern_markers: PatternMarker[];
   trend_direction: "up" | "down" | "flat";
   model_name: string;
   model_version: string;
