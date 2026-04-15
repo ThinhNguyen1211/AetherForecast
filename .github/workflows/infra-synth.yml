@@ -1,0 +1,30 @@
+name: Infra Synth
+
+on:
+  push:
+    paths:
+      - "packages/infra/**"
+      - "package.json"
+      - "tsconfig.json"
+  pull_request:
+    paths:
+      - "packages/infra/**"
+      - "package.json"
+      - "tsconfig.json"
+
+jobs:
+  synth:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install
+        working-directory: .
+      - run: npm install
+      - run: npm run build
+      - run: npm run synth

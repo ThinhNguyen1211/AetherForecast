@@ -1,0 +1,24 @@
+{
+  "name": "@aetherforecast/infra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AWS CDK infrastructure for AetherForecast",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -w -p tsconfig.json",
+    "synth": "cdk synth",
+    "bootstrap": "cdk bootstrap",
+    "deploy": "cdk deploy --require-approval never",
+    "diff": "cdk diff"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.201.0",
+    "constructs": "^10.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.57",
+    "aws-cdk": "^2.1014.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}

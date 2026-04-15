@@ -1,0 +1,56 @@
+name: Reusable Deploy Frontend
+
+on:
+  workflow_call:
+    inputs:
+      aws-region:
+        description: AWS region for S3/CloudFront
+        required: true
+        type: string
+      role-to-assume:
+        description: OIDC role ARN for GitHub Actions
+        required: true
+        type: string
+      artifact-name:
+        description: Build artifact name to deploy
+        required: true
+        type: string
+      s3-bucket:
+        description: Target S3 bucket for frontend assets
+        required: true
+        type: string
+      cloudfront-distribution-id:
+        description: CloudFront distribution ID to invalidate
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-frontend:
+    name: Deploy Frontend Artifact
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: dist
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.role-to-assume }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Sync assets to S3
+        run: |
+          aws s3 sync dist "s3://${{ inputs.s3-bucket }}" --delete
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ inputs.cloudfront-distribution-id }}" \
+            --paths '/*'

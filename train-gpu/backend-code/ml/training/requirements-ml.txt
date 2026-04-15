@@ -1,0 +1,14 @@
+transformers==4.55.4
+accelerate==1.10.0
+torch==2.8.0
+datasets==4.0.0
+peft==0.17.1
+safetensors==0.6.2
+sentencepiece==0.2.1
+huggingface-hub==0.34.4
+numpy==2.2.6
+pandas==2.3.2
+pyarrow==21.0.0
+awswrangler==3.13.0
+polars==1.33.0
+TA-Lib==0.4.32

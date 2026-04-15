@@ -1,0 +1,9 @@
+{
+  email {$LETSENCRYPT_EMAIL}
+}
+
+# Set APP_DOMAIN=:80 for HTTP-only bootstrap, or a DNS hostname for automatic HTTPS.
+{$APP_DOMAIN::80} {
+  encode zstd gzip
+  reverse_proxy 127.0.0.1:{$PORT:8000}
+}

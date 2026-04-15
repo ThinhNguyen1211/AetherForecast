@@ -1,0 +1,144 @@
+{
+  "start": "-PT6H",
+  "periodOverride": "inherit",
+  "widgets": [
+    {
+      "type": "text",
+      "x": 0,
+      "y": 0,
+      "width": 24,
+      "height": 2,
+      "properties": {
+        "markdown": "# AetherForecast Operations Dashboard\\nFastAPI and WebSocket traffic run on a single EC2 backend with Caddy; Batch training, pipeline cron, parquet, and model promotion telemetry are shown below."
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 2,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "region": "__REGION__",
+        "title": "EC2 Backend CPU + Health",
+        "view": "timeSeries",
+        "period": 300,
+        "stat": "Average",
+        "metrics": [
+          ["AWS/EC2", "CPUUtilization", "InstanceId", "__INSTANCE_ID__", { "label": "CPU %" }],
+          [".", "StatusCheckFailed", ".", ".", { "label": "Status Check Failed", "stat": "Maximum", "yAxis": "right" }],
+          ["AetherForecast/Host", "ContainerHealthy", "InstanceId", "__INSTANCE_ID__", { "label": "Container Healthy", "stat": "Average", "yAxis": "right" }]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 2,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "region": "__REGION__",
+        "title": "FastAPI Requests, 5xx, and Latency",
+        "view": "timeSeries",
+        "period": 300,
+        "metrics": [
+          ["AetherForecast/API", "ApiRequests", "Service", "backend", { "stat": "Sum", "label": "Requests" }],
+          [".", "Api5xx", ".", ".", { "stat": "Sum", "label": "5xx Errors" }],
+          [".", "ApiLatencyMs", ".", ".", { "stat": "Average", "label": "Latency (ms)", "yAxis": "right" }]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 8,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "region": "__REGION__",
+        "title": "WebSocket Connections",
+        "view": "timeSeries",
+        "period": 60,
+        "stat": "Average",
+        "metrics": [
+          ["AetherForecast/API", "WebSocketConnections", "Service", "backend", { "label": "Active WebSocket Connections" }]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 8,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "region": "__REGION__",
+        "title": "AWS Batch Training Queue Status",
+        "view": "timeSeries",
+        "period": 300,
+        "metrics": [
+          ["AWS/Batch", "RunningJobs", "JobQueue", "__BATCH_JOB_QUEUE_NAME__", { "stat": "Average", "label": "Running" }],
+          [".", "RunnableJobs", ".", ".", { "stat": "Average", "label": "Runnable" }],
+          [".", "SucceededJobs", ".", ".", { "stat": "Sum", "label": "Succeeded" }],
+          [".", "FailedJobs", ".", ".", { "stat": "Sum", "label": "Failed" }]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 14,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "region": "__REGION__",
+        "title": "Cron Fetch Runs and Failures",
+        "view": "timeSeries",
+        "period": 300,
+        "metrics": [
+          ["AetherForecast/Pipeline", "FetchRuns", "Pipeline", "data-fetch-cron", { "stat": "Sum", "label": "Runs" }],
+          [".", "FetchErrors", ".", ".", { "stat": "Sum", "label": "Failed Runs" }],
+          ["AetherForecast/Host", "CronHealthy", "InstanceId", "__INSTANCE_ID__", { "stat": "Average", "label": "Cron Healthy", "yAxis": "right" }],
+          [".", "CronLastSuccessAgeSeconds", ".", ".", { "stat": "Maximum", "label": "Cron Last Success Age (s)", "yAxis": "right" }]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 14,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "region": "__REGION__",
+        "title": "Parquet Writes and Model Promotion Events",
+        "view": "timeSeries",
+        "period": 300,
+        "metrics": [
+          ["AetherForecast/Pipeline", "ParquetRowsWritten", "Pipeline", "data-fetch-cron", { "stat": "Sum", "label": "Parquet Rows" }],
+          [".", "ModelPromotionSuccess", "Pipeline", "model-promotion", { "stat": "Sum", "label": "Model Promotions" }],
+          [".", "FetchErrors", "Pipeline", "data-fetch-cron", { "stat": "Sum", "label": "Fetch Errors" }]
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 20,
+      "width": 24,
+      "height": 6,
+      "properties": {
+        "region": "__REGION__",
+        "title": "S3 Object Growth (Parquet + Models)",
+        "view": "timeSeries",
+        "period": 86400,
+        "stat": "Average",
+        "metrics": [
+          ["AWS/S3", "NumberOfObjects", "BucketName", "__PARQUET_BUCKET_NAME__", "StorageType", "AllStorageTypes", { "label": "Parquet Objects" }],
+          [".", "NumberOfObjects", "BucketName", "__MODEL_BUCKET_NAME__", "StorageType", "AllStorageTypes", { "label": "Model Objects" }]
+        ]
+      }
+    }
+  ]
+}

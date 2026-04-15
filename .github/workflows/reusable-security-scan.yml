@@ -1,0 +1,62 @@
+name: Reusable Security Scan
+
+on:
+  workflow_call:
+    inputs:
+      scan-path:
+        description: Path to scan in repository
+        required: false
+        type: string
+        default: .
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  security-scan:
+    name: Secret And Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-secrets
+        run: |
+          git clone https://github.com/awslabs/git-secrets.git /tmp/git-secrets
+          cd /tmp/git-secrets
+          sudo make install
+
+      - name: Run git-secrets scan
+        run: |
+          git secrets --register-aws
+          git secrets --add --allowed 'example|dummy|sample'
+          git secrets --add --global '(?i)cognito(.{0,20})?(client_)?secret\s*[:=]'
+          git secrets --scan -r "${{ inputs.scan-path }}"
+
+      - name: Block tracked .env files
+        run: |
+          if git ls-files | grep -E '(^|/)\.env($|\.|/)'; then
+            echo "Tracked .env file detected. Remove it and use GitHub/AWS secrets management."
+            exit 1
+          fi
+
+      - name: Block obvious AWS key patterns
+        run: |
+          if git grep -nE 'AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}' -- .; then
+            echo "Potential AWS access key detected in repository files."
+            exit 1
+          fi
+
+      - name: Run Trivy secret and config scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: ${{ inputs.scan-path }}
+          scanners: secret,config
+          severity: HIGH,CRITICAL
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true

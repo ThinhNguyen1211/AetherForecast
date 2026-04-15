@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-family: "Sora", system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #0b0616;
+  color: #e8e8f3;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.cosmic-shell {
+  min-height: 100vh;
+  background-image: radial-gradient(900px 480px at 20% -15%, rgba(140, 82, 255, 0.23), transparent 55%),
+    radial-gradient(680px 460px at 90% 80%, rgba(0, 255, 255, 0.14), transparent 60%),
+    linear-gradient(150deg, #0b0616 0%, #12081f 55%, #1d1035 100%);
+}
+
+.glass-panel {
+  background: linear-gradient(160deg, rgba(17, 12, 29, 0.82), rgba(20, 14, 34, 0.72));
+  border: 1px solid rgba(176, 136, 245, 0.28);
+  box-shadow: 0 0 0 1px rgba(140, 82, 255, 0.2), 0 0 24px rgba(0, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+}
+
+.muted-label {
+  color: rgba(194, 188, 225, 0.72);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.price-up {
+  color: #00ffff;
+}
+
+.price-down {
+  color: #f16a98;
+}
+
+.scrollbar-slim::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scrollbar-slim::-webkit-scrollbar-track {
+  background: rgba(14, 10, 25, 0.5);
+}
+
+.scrollbar-slim::-webkit-scrollbar-thumb {
+  background: rgba(140, 82, 255, 0.5);
+  border-radius: 999px;
+}

@@ -1,0 +1,110 @@
+name: Reusable Build And Push ECR
+
+on:
+  workflow_call:
+    inputs:
+      aws-region:
+        description: AWS region for ECR
+        required: true
+        type: string
+      role-to-assume:
+        description: OIDC role ARN for GitHub Actions
+        required: true
+        type: string
+      ecr-repository:
+        description: ECR repository name (without registry domain)
+        required: true
+        type: string
+      docker-context:
+        description: Docker build context
+        required: false
+        type: string
+        default: packages/backend
+      dockerfile:
+        description: Dockerfile path
+        required: false
+        type: string
+        default: packages/backend/Dockerfile
+      docker-target:
+        description: Docker build target stage
+        required: false
+        type: string
+        default: runtime
+      image-tag:
+        description: Primary image tag (usually git SHA)
+        required: true
+        type: string
+      push-latest:
+        description: Also push latest tag
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      image_uri:
+        description: Fully-qualified image URI for SHA tag
+        value: ${{ jobs.build-push-ecr.outputs.image_uri }}
+      image_uri_latest:
+        description: Fully-qualified image URI for latest tag (when enabled)
+        value: ${{ jobs.build-push-ecr.outputs.image_uri_latest }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-push-ecr:
+    name: Build And Push ECR Image
+    runs-on: ubuntu-latest
+    outputs:
+      image_uri: ${{ steps.image.outputs.sha_tag }}
+      image_uri_latest: ${{ steps.image.outputs.latest_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.role-to-assume }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tags
+        id: image
+        run: |
+          REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+          REPOSITORY="${{ inputs.ecr-repository }}"
+          SHA_TAG="${REGISTRY}/${REPOSITORY}:${{ inputs.image-tag }}"
+          echo "sha_tag=${SHA_TAG}" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ inputs.push-latest }}" = "true" ]; then
+            echo "latest_tag=${REGISTRY}/${REPOSITORY}:latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.docker-context }}
+          file: ${{ inputs.dockerfile }}
+          target: ${{ inputs.docker-target }}
+          push: true
+          tags: |
+            ${{ steps.image.outputs.sha_tag }}
+            ${{ steps.image.outputs.latest_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan pushed image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.image.outputs.sha_tag }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'

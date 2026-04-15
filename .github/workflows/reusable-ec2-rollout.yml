@@ -1,0 +1,131 @@
+name: Reusable EC2 Rollout Via SSM
+
+on:
+  workflow_call:
+    inputs:
+      aws-region:
+        description: AWS region for SSM rollout
+        required: true
+        type: string
+      role-to-assume:
+        description: OIDC role ARN for GitHub Actions
+        required: true
+        type: string
+      ec2-instance-id:
+        description: Target EC2 instance id for backend rollout
+        required: true
+        type: string
+      image-uri:
+        description: Fully-qualified backend image URI to deploy
+        required: true
+        type: string
+      command-timeout-seconds:
+        description: SSM command timeout in seconds
+        required: false
+        type: number
+        default: 900
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  rollout:
+    name: Rollout Backend Container On EC2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.role-to-assume }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Validate EC2 instance exists
+        run: |
+          aws ec2 describe-instances \
+            --instance-ids "${{ inputs.ec2-instance-id }}" \
+            --query "Reservations[0].Instances[0].InstanceId" \
+            --output text
+
+      - name: Send SSM rollout command
+        id: send
+        env:
+          INSTANCE_ID: ${{ inputs.ec2-instance-id }}
+          IMAGE_URI: ${{ inputs.image-uri }}
+          TIMEOUT_SECONDS: ${{ inputs.command-timeout-seconds }}
+        run: |
+          cat > rollout-commands.json <<EOF
+          {
+            "commands": [
+              "set -euo pipefail",
+              "IMAGE_URI='${IMAGE_URI}'",
+              "echo [rollout] image=$IMAGE_URI",
+              "docker pull $IMAGE_URI",
+              "docker rm -f aetherforecast-backend-canary || true",
+              "docker run -d --name aetherforecast-backend-canary --restart unless-stopped -p 8080:80 --env-file /opt/aetherforecast/.env -v /opt/aetherforecast/caddy_data:/data -v /opt/aetherforecast/caddy_config:/config $IMAGE_URI",
+              "sleep 5",
+              "curl -fsS --max-time 10 http://127.0.0.1:8080/health",
+              "docker rm -f aetherforecast-backend-old || true",
+              "docker stop aetherforecast-backend || true",
+              "docker rename aetherforecast-backend aetherforecast-backend-old || true",
+              "docker stop aetherforecast-backend-canary",
+              "docker rm -f aetherforecast-backend-canary",
+              "docker create --name aetherforecast-backend --restart unless-stopped -p 80:80 -p 443:443 --env-file /opt/aetherforecast/.env -v /opt/aetherforecast/caddy_data:/data -v /opt/aetherforecast/caddy_config:/config $IMAGE_URI",
+              "docker start aetherforecast-backend",
+              "sleep 5",
+              "curl -fsS --max-time 10 http://127.0.0.1/health",
+              "echo $IMAGE_URI > /opt/aetherforecast/backend-image-uri.txt",
+              "docker rm -f aetherforecast-backend-old || true"
+            ]
+          }
+          EOF
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "AetherForecast EC2 backend rollout from GitHub Actions" \
+            --parameters file://rollout-commands.json \
+            --timeout-seconds "$TIMEOUT_SECONDS" \
+            --max-concurrency "1" \
+            --max-errors "0" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "command_id=$COMMAND_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for SSM command completion
+        env:
+          INSTANCE_ID: ${{ inputs.ec2-instance-id }}
+          COMMAND_ID: ${{ steps.send.outputs.command_id }}
+        run: |
+          aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID"
+
+      - name: Check rollout command result
+        env:
+          INSTANCE_ID: ${{ inputs.ec2-instance-id }}
+          COMMAND_ID: ${{ steps.send.outputs.command_id }}
+        run: |
+          STATUS=$(aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "Status" \
+            --output text)
+
+          echo "SSM command status: $STATUS"
+
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$INSTANCE_ID" \
+            --query "StandardOutputContent" \
+            --output text
+
+          if [ "$STATUS" != "Success" ]; then
+            aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --query "StandardErrorContent" \
+              --output text
+            exit 1
+          fi

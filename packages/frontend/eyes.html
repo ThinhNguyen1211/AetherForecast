@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>Aetherforecast Eye - Random Nodes</title>
+<style>
+  body {
+    background-color: #0b0616; /* Nền tối vũ trụ */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+  }
+  
+  /* 1. HIỆU ỨNG CO GIÃN NHẸ MẠNG LƯỚI BÊN NGOÀI */
+  .pulse-network {
+    transform-origin: 400px 250px;
+    animation: scalePulse 4s ease-in-out infinite;
+  }
+  @keyframes scalePulse {
+    0%, 100% { transform: scale(1); opacity: 0.8; }
+    50% { transform: scale(1.03); opacity: 1; }
+  }
+
+  /* 2. HIỆU ỨNG ĐIỂM DỮ LIỆU NHẤP NHÁY (Phân bố random) */
+  .data-node {
+    animation: nodeFlash 2.5s infinite alternate;
+  }
+  @keyframes nodeFlash {
+    0% { r: 2; opacity: 0.2; fill: rgba(140, 82, 255, 0.5); }
+    100% { r: 5.5; opacity: 1; fill: rgba(0, 255, 255, 1); filter: drop-shadow(0 0 8px rgba(0, 255, 255, 0.9)); }
+  }
+
+  /* 3. HIỆU ỨNG CHẤM SÁNG CHẠY VIỀN */
+  .light-trail {
+    stroke-dasharray: 15, 600;
+    animation: dashMove 4s linear infinite;
+  }
+  .light-trail-2 {
+    stroke-dasharray: 20, 700;
+    animation: dashMove 5s linear infinite reverse;
+  }
+  @keyframes dashMove {
+    0% { stroke-dashoffset: 800; }
+    100% { stroke-dashoffset: 0; }
+  }
+
+  /* 4. HIỆU ỨNG TÂM MẮT XOAY (Spinning Galaxy) */
+  .spin-galaxy {
+    transform-origin: 400px 250px;
+    animation: spin 15s linear infinite;
+  }
+  @keyframes spin {
+    100% { transform: rotate(360deg); }
+  }
+
+  svg {
+    width: 100%;
+    max-width: 800px;
+  }
+</style>
+</head>
+<body>
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500">
+  <defs>
+    <radialGradient id="galaxyGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#000000"/>
+      <stop offset="30%" stop-color="#140a3b"/>
+      <stop offset="50%" stop-color="rgba(0, 100, 200, 0.8)"/>
+      <stop offset="75%" stop-color="#8c52ff"/>
+      <stop offset="100%" stop-color="#3b1b69"/>
+    </radialGradient>
+    
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <g class="pulse-network">
+    <path d="M 100 250 L 400 30 L 700 250 L 400 470 Z" fill="none" stroke="rgba(44, 21, 79, 0.7)" stroke-width="1"/>
+    <path d="M 180 250 L 400 100 L 620 250 L 400 400 Z" fill="none" stroke="rgba(0, 150, 255, 0.4)" stroke-width="2" stroke-dasharray="4 4"/>
+    <path d="M 100 250 Q 400 -50 700 250" fill="none" stroke="rgba(59, 27, 105, 0.8)" stroke-width="1.5"/>
+    <path d="M 100 250 Q 400 550 700 250" fill="none" stroke="rgba(0, 120, 255, 0.3)" stroke-width="1.5"/>
+  </g>
+
+  <g>
+    <path d="M 220 250 Q 400 110 580 250 Q 400 390 220 250" fill="none" stroke="rgba(0, 200, 255, 0.6)" stroke-width="5" filter="url(#glow)"/>
+    <path d="M 250 250 Q 400 140 550 250 Q 400 360 250 250" fill="none" stroke="#b088f5" stroke-width="2"/>
+    
+    <g class="spin-galaxy">
+      <circle cx="400" cy="250" r="75" fill="url(#galaxyGrad)"/>
+      <circle cx="400" cy="250" r="25" fill="#000"/>
+      <circle cx="360" cy="210" r="2" fill="rgba(0, 255, 255, 0.8)" filter="url(#glow)"/>
+      <circle cx="440" cy="280" r="1.5" fill="#fff" opacity="0.6"/>
+      <circle cx="350" cy="270" r="1" fill="#fff" opacity="0.5"/>
+      <circle cx="450" cy="220" r="2.5" fill="#d5b3ff" opacity="0.9"/>
+    </g>
+  </g>
+
+  <g>
+    <path d="M 220 250 Q 400 110 580 250" fill="none" stroke="rgba(0, 255, 255, 0.8)" stroke-width="3" class="light-trail" filter="url(#glow)"/>
+    <path d="M 100 250 Q 400 550 700 250" fill="none" stroke="#d5b3ff" stroke-width="4" class="light-trail-2" filter="url(#glow)"/>
+  </g>
+
+  <g class="pulse-network">
+    <circle cx="190" cy="184" class="data-node" style="animation-delay: 0.1s;" />
+    <circle cx="520" cy="117" class="data-node" style="animation-delay: 1.4s;" />
+    <circle cx="610" cy="184" class="data-node" style="animation-delay: 0.7s;" />
+    <circle cx="240" cy="353" class="data-node" style="animation-delay: 2.1s;" />
+    <circle cx="460" cy="427" class="data-node" style="animation-delay: 0.4s;" />
+    <circle cx="640" cy="296" class="data-node" style="animation-delay: 1.8s;" />
+
+    <circle cx="300" cy="168" class="data-node" style="animation-delay: 0.9s;" />
+    <circle cx="220" cy="222" class="data-node" style="animation-delay: 2.5s;" />
+    <circle cx="480" cy="154" class="data-node" style="animation-delay: 0.3s;" />
+    <circle cx="280" cy="317" class="data-node" style="animation-delay: 1.2s;" />
+    <circle cx="350" cy="365" class="data-node" style="animation-delay: 0.8s;" />
+    <circle cx="580" cy="277" class="data-node" style="animation-delay: 2.0s;" />
+
+    <circle cx="260" cy="130" class="data-node" style="animation-delay: 1.6s;" />
+    <circle cx="530" cy="125" class="data-node" style="animation-delay: 0.5s;" />
+    <circle cx="330" cy="385" class="data-node" style="animation-delay: 2.3s;" />
+    <circle cx="570" cy="350" class="data-node" style="animation-delay: 1.1s;" />
+
+    <circle cx="130" cy="250" class="data-node" style="animation-delay: 0.6s;" />
+    <circle cx="670" cy="250" class="data-node" style="animation-delay: 2.2s;" />
+    <circle cx="395" cy="50"  class="data-node" style="animation-delay: 1.9s;" />
+    <circle cx="410" cy="450" class="data-node" style="animation-delay: 1.0s;" />
+  </g>
+
+</svg>
+
+</body>
+</html>

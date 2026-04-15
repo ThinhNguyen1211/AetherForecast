@@ -1,0 +1,45 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aetherforecast-backend:dev
+    ports:
+      - "8080:80"
+      - "8443:443"
+    env_file:
+      - .env
+    environment:
+      APP_ENV: dev
+      LOG_LEVEL: DEBUG
+      UVICORN_WORKERS: 1
+      APP_DOMAIN: :80
+    volumes:
+      - ./src:/app/src
+      - ./app:/app/app
+      - ./ml:/app/ml
+      - ./entrypoint.sh:/app/entrypoint.sh
+      - ./cronjob.sh:/app/cronjob.sh
+      - ./Caddyfile:/etc/caddy/Caddyfile
+
+  backend-cron:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aetherforecast-backend:dev
+    env_file:
+      - .env
+    environment:
+      APP_ENV: dev
+      LOG_LEVEL: DEBUG
+      CRON_MODE: "true"
+      FETCH_LOOP_SECONDS: 300
+      KLINE_INTERVAL: 1m
+      FETCH_CONCURRENCY: 24
+      APP_DOMAIN: :80
+    volumes:
+      - ./src:/app/src
+      - ./app:/app/app
+      - ./ml:/app/ml
+      - ./cronjob.sh:/app/cronjob.sh
+    command: /app/cronjob.sh

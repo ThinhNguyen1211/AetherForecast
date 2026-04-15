@@ -1,0 +1,15 @@
+{
+  "name": "aetherforecast",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AetherForecast monorepo",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "infra:build": "npm --workspace @aetherforecast/infra run build",
+    "infra:synth": "npm --workspace @aetherforecast/infra run synth",
+    "infra:bootstrap": "npm --workspace @aetherforecast/infra run bootstrap",
+    "infra:deploy": "npm --workspace @aetherforecast/infra run deploy"
+  }
+}

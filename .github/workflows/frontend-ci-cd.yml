@@ -1,0 +1,158 @@
+name: Frontend CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - packages/frontend/**
+      - package-lock.json
+      - .github/workflows/frontend-ci-cd.yml
+      - .github/workflows/reusable-deploy-frontend.yml
+      - .github/workflows/reusable-security-scan.yml
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - packages/frontend/**
+      - package-lock.json
+      - .github/workflows/frontend-ci-cd.yml
+      - .github/workflows/reusable-deploy-frontend.yml
+      - .github/workflows/reusable-security-scan.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-ci-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-scan:
+    name: Repository Secret And Config Scan
+    uses: ./.github/workflows/reusable-security-scan.yml
+    with:
+      scan-path: .
+
+  frontend-verify:
+    name: TS Lint Format (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    needs: security-scan
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20', '22']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript type check
+        run: npx tsc --noEmit -p packages/frontend/tsconfig.json
+
+      - name: ESLint
+        run: |
+          npm exec --yes \
+            --package=eslint@9 \
+            --package=@typescript-eslint/parser@8 \
+            --package=@typescript-eslint/eslint-plugin@8 \
+            -- eslint "packages/frontend/src/**/*.{ts,tsx}" \
+              --parser @typescript-eslint/parser \
+              --plugin @typescript-eslint \
+              --rule "@typescript-eslint/no-unused-vars:error" \
+              --max-warnings=0 \
+              --no-error-on-unmatched-pattern
+
+      - name: Prettier check
+        run: |
+          npx --yes prettier@3 --check \
+            "packages/frontend/src/**/*.{ts,tsx,css}" \
+            "packages/frontend/index.html"
+
+  frontend-security:
+    name: Frontend Security Scan
+    runs-on: ubuntu-latest
+    needs: frontend-verify
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: npm audit (high+)
+        run: npm audit --workspace @aetherforecast/frontend --audit-level=high
+
+      - name: Trivy filesystem scan (frontend)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: packages/frontend
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: '1'
+
+  frontend-build:
+    name: Build Frontend Artifact
+    runs-on: ubuntu-latest
+    needs: [frontend-verify, frontend-security]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build production bundle
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+          VITE_COGNITO_REGION: ap-southeast-1
+          VITE_COGNITO_USER_POOL_ID: ${{ vars.COGNITO_USER_POOL_ID }}
+          VITE_COGNITO_CLIENT_ID: ${{ vars.COGNITO_APP_CLIENT_ID }}
+        run: npm --workspace @aetherforecast/frontend run build
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: packages/frontend/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  frontend-deploy:
+    name: Deploy Frontend To S3/CloudFront (Main)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: frontend-build
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/reusable-deploy-frontend.yml
+    with:
+      aws-region: ap-southeast-1
+      role-to-assume: ${{ vars.AWS_GITHUB_OIDC_ROLE_ARN }}
+      artifact-name: frontend-dist
+      s3-bucket: ${{ vars.FRONTEND_S3_BUCKET }}
+      cloudfront-distribution-id: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
