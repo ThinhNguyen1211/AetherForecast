@@ -94,6 +94,7 @@ jobs:
           echo "command_id=$COMMAND_ID" >> "$GITHUB_OUTPUT"
 
       - name: Wait for SSM command completion
+        continue-on-error: true
         env:
           INSTANCE_ID: ${{ inputs.ec2-instance-id }}
           COMMAND_ID: ${{ steps.send.outputs.command_id }}
@@ -103,6 +104,7 @@ jobs:
             --instance-id "$INSTANCE_ID"
 
       - name: Check rollout command result
+        if: always()
         env:
           INSTANCE_ID: ${{ inputs.ec2-instance-id }}
           COMMAND_ID: ${{ steps.send.outputs.command_id }}

@@ -134,6 +134,7 @@ jobs:
       docker-context: packages/backend
       dockerfile: packages/backend/Dockerfile
       docker-target: runtime
+      platforms: linux/arm64
       image-tag: ${{ github.sha }}
       push-latest: true
 

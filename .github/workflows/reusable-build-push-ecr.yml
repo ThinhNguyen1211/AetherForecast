@@ -30,6 +30,11 @@ on:
         required: false
         type: string
         default: runtime
+      platforms:
+        description: Target container platforms for image build/push
+        required: false
+        type: string
+        default: linux/arm64
       image-tag:
         description: Primary image tag (usually git SHA)
         required: true
@@ -93,6 +98,7 @@ jobs:
           context: ${{ inputs.docker-context }}
           file: ${{ inputs.dockerfile }}
           target: ${{ inputs.docker-target }}
+          platforms: ${{ inputs.platforms }}
           push: true
           tags: |
             ${{ steps.image.outputs.sha_tag }}
