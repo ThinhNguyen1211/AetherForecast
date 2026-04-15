@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import {
+  BusinessDay,
   CandlestickData,
   ColorType,
   HistogramData,
@@ -7,6 +8,8 @@ import {
   LineData,
   LineStyle,
   LogicalRange,
+  TickMarkType,
+  Time,
   UTCTimestamp,
   createChart,
 } from "lightweight-charts";
@@ -17,6 +20,7 @@ interface TradingChartProps {
   symbol: string;
   candles: Candle[];
   timeframe: string;
+  timeZone?: string;
   prediction: PredictResponse | null;
   predictionAnchor?: {
     baseTimestamp: string;
@@ -56,6 +60,38 @@ function parseTimestampMs(timestamp: string): number {
 
 function toUnix(timestamp: string): UTCTimestamp {
   return Math.floor(parseTimestampMs(timestamp) / 1000) as UTCTimestamp;
+}
+
+function chartTimeToDate(time: Time): Date {
+  if (typeof time === "number") {
+    return new Date(Number(time) * 1000);
+  }
+
+  const businessDay = time as BusinessDay;
+  return new Date(Date.UTC(businessDay.year, businessDay.month - 1, businessDay.day));
+}
+
+function formatChartTimeLabel(time: Time, timeZone: string, tickMarkType?: TickMarkType): string {
+  const date = chartTimeToDate(time);
+  const includeSeconds = tickMarkType === TickMarkType.TimeWithSeconds;
+  const isDateOnly = tickMarkType === TickMarkType.DayOfMonth || tickMarkType === TickMarkType.Month || tickMarkType === TickMarkType.Year;
+
+  const formatter = new Intl.DateTimeFormat("vi-VN", {
+    timeZone,
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    ...(isDateOnly
+      ? {}
+      : {
+          hour: "2-digit",
+          minute: "2-digit",
+          ...(includeSeconds ? { second: "2-digit" } : {}),
+          hour12: false,
+        }),
+  });
+
+  return formatter.format(date);
 }
 
 function sanitizeCandles(candles: Candle[]): Candle[] {
@@ -234,6 +270,7 @@ export default function TradingChart({
   symbol,
   candles,
   timeframe,
+  timeZone,
   prediction,
   predictionAnchor,
   onRequestOlderCandles,
@@ -255,6 +292,8 @@ export default function TradingChart({
   const forecastCandleSeriesRef = useRef<ReturnType<IChartApi["addCandlestickSeries"]> | null>(null);
   const currentBaselineSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
   const predictionLineSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
+  const predictionHighDotSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
+  const predictionLowDotSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
 
   const rsiSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
   const macdHistogramRef = useRef<ReturnType<IChartApi["addHistogramSeries"]> | null>(null);
@@ -270,6 +309,9 @@ export default function TradingChart({
   const normalizedCandlesRef = useRef<Candle[]>([]);
   const loadOlderCallbackRef = useRef<((oldestTimestamp: string) => void) | null>(null);
   const loadingOlderRef = useRef(false);
+  const resolvedTimeZone =
+    timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const timeZoneRef = useRef<string>(resolvedTimeZone);
   const normalizedInputCandles = useMemo(() => sanitizeCandles(candles), [candles]);
   const syncOverlayVisible = isSyncing;
 
@@ -286,6 +328,25 @@ export default function TradingChart({
   }, [isLoadingOlder]);
 
   useEffect(() => {
+    timeZoneRef.current = resolvedTimeZone;
+
+    const options = {
+      localization: {
+        locale: "vi-VN",
+        timeFormatter: (value: Time) => formatChartTimeLabel(value, timeZoneRef.current),
+      },
+      timeScale: {
+        tickMarkFormatter: (value: Time, tickMarkType: TickMarkType) =>
+          formatChartTimeLabel(value, timeZoneRef.current, tickMarkType),
+      },
+    };
+
+    mainChartApiRef.current?.applyOptions(options);
+    rsiChartApiRef.current?.applyOptions(options);
+    macdChartApiRef.current?.applyOptions(options);
+  }, [resolvedTimeZone]);
+
+  useEffect(() => {
     if (!wrapperRef.current || !mainChartRef.current || !rsiChartRef.current || !macdChartRef.current) {
       return;
     }
@@ -298,6 +359,10 @@ export default function TradingChart({
         textColor: "rgba(220,220,235,0.9)",
         background: { type: ColorType.Solid, color: "rgba(11,6,22,0.55)" },
       },
+      localization: {
+        locale: "vi-VN",
+        timeFormatter: (value: Time) => formatChartTimeLabel(value, timeZoneRef.current),
+      },
       grid: {
         vertLines: { color: "rgba(120, 95, 180, 0.16)" },
         horzLines: { color: "rgba(120, 95, 180, 0.16)" },
@@ -307,6 +372,10 @@ export default function TradingChart({
       },
       timeScale: {
         borderColor: "rgba(136, 80, 240, 0.35)",
+        timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: (value: Time, tickMarkType: TickMarkType) =>
+          formatChartTimeLabel(value, timeZoneRef.current, tickMarkType),
       },
       crosshair: {
         vertLine: { color: "rgba(0,255,255,0.4)", labelBackgroundColor: "#211038" },
@@ -357,8 +426,12 @@ export default function TradingChart({
       color: "rgba(0, 255, 255, 0.85)",
       lineWidth: 1,
       lineStyle: LineStyle.Dashed,
-      priceLineVisible: false,
-      lastValueVisible: false,
+      priceLineVisible: true,
+      priceLineColor: "rgba(0, 255, 255, 0.72)",
+      priceLineStyle: LineStyle.Dashed,
+      lastValueVisible: true,
+      crosshairMarkerVisible: false,
+      title: "Current",
     });
     currentBaselineSeriesRef.current = currentBaselineSeries;
 
@@ -368,8 +441,35 @@ export default function TradingChart({
       lineStyle: LineStyle.Solid,
       priceLineVisible: false,
       lastValueVisible: false,
+      crosshairMarkerRadius: 5,
+      crosshairMarkerBorderColor: "#8c52ff",
+      crosshairMarkerBackgroundColor: "#8c52ff",
     });
     predictionLineSeriesRef.current = predictionLineSeries;
+
+    const predictionHighDotSeries = mainChart.addLineSeries({
+      color: "rgba(0,0,0,0)",
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: true,
+      crosshairMarkerRadius: 4,
+      crosshairMarkerBorderColor: "#f8c13a",
+      crosshairMarkerBackgroundColor: "#f8c13a",
+    });
+    predictionHighDotSeriesRef.current = predictionHighDotSeries;
+
+    const predictionLowDotSeries = mainChart.addLineSeries({
+      color: "rgba(0,0,0,0)",
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: true,
+      crosshairMarkerRadius: 4,
+      crosshairMarkerBorderColor: "#34d5ff",
+      crosshairMarkerBackgroundColor: "#34d5ff",
+    });
+    predictionLowDotSeriesRef.current = predictionLowDotSeries;
 
     const rsiChart = createChart(rsiChartRef.current, {
       ...sharedOptions,
@@ -446,6 +546,8 @@ export default function TradingChart({
       forecastCandleSeriesRef.current = null;
       currentBaselineSeriesRef.current = null;
       predictionLineSeriesRef.current = null;
+      predictionHighDotSeriesRef.current = null;
+      predictionLowDotSeriesRef.current = null;
       rsiSeriesRef.current = null;
       macdHistogramRef.current = null;
       macdSignalRef.current = null;
@@ -521,6 +623,8 @@ export default function TradingChart({
       !forecastCandleSeriesRef.current ||
       !currentBaselineSeriesRef.current ||
       !predictionLineSeriesRef.current ||
+      !predictionHighDotSeriesRef.current ||
+      !predictionLowDotSeriesRef.current ||
       !rsiSeriesRef.current ||
       !macdHistogramRef.current ||
       !macdSignalRef.current ||
@@ -536,6 +640,8 @@ export default function TradingChart({
       forecastCandleSeriesRef.current.setData([]);
       currentBaselineSeriesRef.current.setData([]);
       predictionLineSeriesRef.current.setData([]);
+      predictionHighDotSeriesRef.current.setData([]);
+      predictionLowDotSeriesRef.current.setData([]);
       rsiSeriesRef.current.setData([]);
       macdHistogramRef.current.setData([]);
       macdSignalRef.current.setData([]);
@@ -599,6 +705,8 @@ export default function TradingChart({
       const volatilityUpperValues = primaryVolatilityBand?.upper ?? [];
 
       const forecastCandles: CandlestickData<UTCTimestamp>[] = [];
+      const highDots: LineData<UTCTimestamp>[] = [];
+      const lowDots: LineData<UTCTimestamp>[] = [];
       for (let index = 0; index < prediction.prediction_array.length; index += 1) {
         const time = (anchorTime + (index + 1) * stepSeconds) as UTCTimestamp;
         const open = index === 0 ? anchorClose : prediction.prediction_array[index - 1];
@@ -630,17 +738,28 @@ export default function TradingChart({
               ? volatilityUpperValues[volatilityUpperValues.length - 1]
               : confidenceHigh;
 
-        const high = Math.max(open, close, confidenceHigh, volatilityHigh);
-        const low = Math.min(open, close, confidenceLow, volatilityLow);
+        const fallbackHigh = Number.isFinite(volatilityHigh) ? volatilityHigh : close;
+        const fallbackLow = Number.isFinite(volatilityLow) ? volatilityLow : close;
+        const rangeHigh = Number.isFinite(confidenceHigh) ? confidenceHigh : fallbackHigh;
+        const rangeLow = Number.isFinite(confidenceLow) ? confidenceLow : fallbackLow;
+
+        const high = Math.max(open, close, rangeHigh);
+        const low = Math.min(open, close, rangeLow);
 
         forecastCandles.push({ time, open, high, low, close });
+        highDots.push({ time, value: high });
+        lowDots.push({ time, value: low });
       }
 
       forecastCandleSeriesRef.current.setData(forecastCandles);
+      predictionHighDotSeriesRef.current.setData(highDots);
+      predictionLowDotSeriesRef.current.setData(lowDots);
     } else {
       forecastCandleSeriesRef.current.setData([]);
       currentBaselineSeriesRef.current.setData([]);
       predictionLineSeriesRef.current.setData([]);
+      predictionHighDotSeriesRef.current.setData([]);
+      predictionLowDotSeriesRef.current.setData([]);
     }
 
     rsiSeriesRef.current.setData(calculateRsi(normalizedInputCandles, 14));
@@ -769,7 +888,7 @@ export default function TradingChart({
       <div className="flex flex-wrap items-center gap-4 px-1 text-[11px] text-violet-200/75">
         <span className="flex items-center gap-2">
           <span className="inline-block h-[2px] w-5 bg-cyan-300" />
-          <span>Current baseline</span>
+          <span>Current baseline + price label</span>
         </span>
         <span className="flex items-center gap-2">
           <span className="inline-block h-[2px] w-5 bg-violet-400" />
@@ -778,6 +897,11 @@ export default function TradingChart({
         <span className="flex items-center gap-2">
           <span className="inline-block h-3 w-3 rounded-sm border border-violet-300/80 bg-violet-500/20" />
           <span>Forecast range (high/low)</span>
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="inline-block h-2 w-2 rounded-full bg-amber-300" />
+          <span className="inline-block h-2 w-2 rounded-full bg-cyan-300" />
+          <span>High/Low endpoint dots</span>
         </span>
       </div>
       {isLoadingOlder && (

@@ -12,7 +12,6 @@ import { useMarketStore } from "@/hooks/useMarketStore";
 import {
   fetchBinance24hTicker,
   Candle,
-  PredictResponse,
   RealtimeKlineMessage,
   connectRealtimeKline,
   fetchChart,
@@ -43,6 +42,49 @@ const FORECAST_HORIZON_OPTIONS = [
 ];
 
 const SUPPORTED_TIMEFRAMES: Timeframe[] = ["1m", "5m", "15m", "1h", "4h", "1d", "1w"];
+
+interface RegionalClockContext {
+  timeZone: string;
+  locationLabel: string;
+}
+
+function RegionalClockBadge({
+  timeZone,
+  locationLabel,
+}: {
+  timeZone: string;
+  locationLabel: string;
+}) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const formattedNow = useMemo(
+    () =>
+      new Intl.DateTimeFormat("vi-VN", {
+        timeZone,
+        day: "2-digit",
+        month: "2-digit",
+        year: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }).format(new Date(nowMs)),
+    [nowMs, timeZone],
+  );
+
+  return (
+    <p className="text-[11px] text-cyan-200/85">
+      {formattedNow} · {locationLabel}
+    </p>
+  );
+}
 
 function isSupportedTimeframe(value: unknown): value is Timeframe {
   return typeof value === "string" && SUPPORTED_TIMEFRAMES.includes(value as Timeframe);
@@ -210,6 +252,8 @@ function resolveApiErrorMessage(error: unknown, fallback: string): string {
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const browserTimeZone =
+    Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
   const {
     token,
@@ -251,6 +295,10 @@ export default function Dashboard() {
     lastPrice: number;
     changePercent: number;
   } | null>(null);
+  const [regionalClock, setRegionalClock] = useState<RegionalClockContext>({
+    timeZone: browserTimeZone,
+    locationLabel: `${browserTimeZone} (browser)` ,
+  });
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const hasMoreHistoryRef = useRef(true);
@@ -500,6 +548,70 @@ export default function Dashboard() {
   }, [setApiStatus]);
 
   useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const resolveRegionalClock = async () => {
+      try {
+        const response = await fetch("https://worldtimeapi.org/api/ip", {
+          signal: controller.signal,
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error(`worldtimeapi unavailable: ${response.status}`);
+        }
+
+        const payload = (await response.json()) as {
+          timezone?: string;
+          city?: string;
+          region?: string;
+          country_name?: string;
+        };
+
+        if (cancelled) {
+          return;
+        }
+
+        const resolvedTimeZone =
+          typeof payload.timezone === "string" && payload.timezone
+            ? payload.timezone
+            : browserTimeZone;
+
+        const locationParts = [payload.city, payload.region, payload.country_name]
+          .filter((part): part is string => typeof part === "string" && part.length > 0)
+          .slice(0, 2);
+
+        const resolvedLocationLabel =
+          locationParts.length > 0
+            ? `${locationParts.join(", ")} · ${resolvedTimeZone}`
+            : `${resolvedTimeZone} (IP region)`;
+
+        setRegionalClock({
+          timeZone: resolvedTimeZone,
+          locationLabel: resolvedLocationLabel,
+        });
+      } catch {
+        if (cancelled) {
+          return;
+        }
+
+        setRegionalClock({
+          timeZone: browserTimeZone,
+          locationLabel: `${browserTimeZone} (browser)`,
+        });
+      }
+    };
+
+    void resolveRegionalClock();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [browserTimeZone]);
+
+  useEffect(() => {
     void loadSymbols();
   }, [loadSymbols]);
 
@@ -707,13 +819,19 @@ export default function Dashboard() {
                   {symbol} Candles ({timeframe})
                 </h2>
               </div>
-              <p className="text-xs text-violet-200/70">
-                {loadingChart
-                  ? "Syncing chart..."
-                  : loadingOlderCandles
-                    ? `Loading older candles... (${chartCandles.length})`
-                    : `Candles loaded: ${chartCandles.length}`}
-              </p>
+              <div className="text-right">
+                <p className="text-xs text-violet-200/70">
+                  {loadingChart
+                    ? "Syncing chart..."
+                    : loadingOlderCandles
+                      ? `Loading older candles... (${chartCandles.length})`
+                      : `Candles loaded: ${chartCandles.length}`}
+                </p>
+                <RegionalClockBadge
+                  timeZone={regionalClock.timeZone}
+                  locationLabel={regionalClock.locationLabel}
+                />
+              </div>
             </div>
 
             <TradingChart
@@ -723,9 +841,10 @@ export default function Dashboard() {
               timeframe={timeframe}
               prediction={prediction}
               predictionAnchor={predictionAnchor}
+              timeZone={regionalClock.timeZone}
               onRequestOlderCandles={loadOlderCandles}
               isLoadingOlder={loadingOlderCandles}
-              isSyncing={loadingChart || wsStatus === "connecting"}
+              isSyncing={loadingChart || (chartCandles.length === 0 && wsStatus !== "online")}
               isPredicting={loadingPrediction}
             />
           </section>
