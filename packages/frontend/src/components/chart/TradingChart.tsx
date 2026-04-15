@@ -71,27 +71,76 @@ function chartTimeToDate(time: Time): Date {
   return new Date(Date.UTC(businessDay.year, businessDay.month - 1, businessDay.day));
 }
 
-function formatChartTimeLabel(time: Time, timeZone: string, tickMarkType?: TickMarkType): string {
+function formatAxisTimeLabel(time: Time, timeZone: string, tickMarkType: TickMarkType): string {
   const date = chartTimeToDate(time);
-  const includeSeconds = tickMarkType === TickMarkType.TimeWithSeconds;
-  const isDateOnly = tickMarkType === TickMarkType.DayOfMonth || tickMarkType === TickMarkType.Month || tickMarkType === TickMarkType.Year;
+  switch (tickMarkType) {
+    case TickMarkType.Year:
+      return new Intl.DateTimeFormat("vi-VN", {
+        timeZone,
+        year: "numeric",
+      }).format(date);
+    case TickMarkType.Month:
+      return new Intl.DateTimeFormat("vi-VN", {
+        timeZone,
+        month: "2-digit",
+        year: "2-digit",
+      }).format(date);
+    case TickMarkType.DayOfMonth:
+      return new Intl.DateTimeFormat("vi-VN", {
+        timeZone,
+        day: "2-digit",
+        month: "2-digit",
+      }).format(date);
+    case TickMarkType.TimeWithSeconds:
+      return new Intl.DateTimeFormat("vi-VN", {
+        timeZone,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      }).format(date);
+    default:
+      return new Intl.DateTimeFormat("vi-VN", {
+        timeZone,
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(date);
+  }
+}
 
-  const formatter = new Intl.DateTimeFormat("vi-VN", {
+function formatCrosshairTimeLabel(time: Time, timeZone: string): string {
+  const date = chartTimeToDate(time);
+  return new Intl.DateTimeFormat("vi-VN", {
     timeZone,
     day: "2-digit",
     month: "2-digit",
     year: "2-digit",
-    ...(isDateOnly
-      ? {}
-      : {
-          hour: "2-digit",
-          minute: "2-digit",
-          ...(includeSeconds ? { second: "2-digit" } : {}),
-          hour12: false,
-        }),
-  });
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
 
-  return formatter.format(date);
+function forecastRangeCapRatio(timeframe: string): number {
+  switch (timeframe) {
+    case "1m":
+      return 0.0035;
+    case "5m":
+      return 0.005;
+    case "15m":
+      return 0.0075;
+    case "1h":
+      return 0.012;
+    case "4h":
+      return 0.02;
+    case "1d":
+      return 0.035;
+    case "1w":
+      return 0.08;
+    default:
+      return 0.012;
+  }
 }
 
 function sanitizeCandles(candles: Candle[]): Candle[] {
@@ -333,11 +382,11 @@ export default function TradingChart({
     const options = {
       localization: {
         locale: "vi-VN",
-        timeFormatter: (value: Time) => formatChartTimeLabel(value, timeZoneRef.current),
+        timeFormatter: (value: Time) => formatCrosshairTimeLabel(value, timeZoneRef.current),
       },
       timeScale: {
         tickMarkFormatter: (value: Time, tickMarkType: TickMarkType) =>
-          formatChartTimeLabel(value, timeZoneRef.current, tickMarkType),
+          formatAxisTimeLabel(value, timeZoneRef.current, tickMarkType),
       },
     };
 
@@ -361,7 +410,7 @@ export default function TradingChart({
       },
       localization: {
         locale: "vi-VN",
-        timeFormatter: (value: Time) => formatChartTimeLabel(value, timeZoneRef.current),
+        timeFormatter: (value: Time) => formatCrosshairTimeLabel(value, timeZoneRef.current),
       },
       grid: {
         vertLines: { color: "rgba(120, 95, 180, 0.16)" },
@@ -375,7 +424,7 @@ export default function TradingChart({
         timeVisible: true,
         secondsVisible: false,
         tickMarkFormatter: (value: Time, tickMarkType: TickMarkType) =>
-          formatChartTimeLabel(value, timeZoneRef.current, tickMarkType),
+          formatAxisTimeLabel(value, timeZoneRef.current, tickMarkType),
       },
       crosshair: {
         vertLine: { color: "rgba(0,255,255,0.4)", labelBackgroundColor: "#211038" },
@@ -668,6 +717,11 @@ export default function TradingChart({
     candleSeriesRef.current.setData(candleData);
 
     if (prediction && normalizedInputCandles.length > 0 && prediction.prediction_array.length > 0) {
+      candleSeriesRef.current.applyOptions({
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+
       const lastCandle = normalizedInputCandles[normalizedInputCandles.length - 1];
       const fallbackAnchorTime = toUnix(lastCandle.timestamp);
       const parsedAnchorMs = predictionAnchor ? parseTimestampMs(predictionAnchor.baseTimestamp) : Number.NaN;
@@ -703,6 +757,18 @@ export default function TradingChart({
       const primaryVolatilityBand = prediction.volatility_bands?.[0];
       const volatilityLowerValues = primaryVolatilityBand?.lower ?? [];
       const volatilityUpperValues = primaryVolatilityBand?.upper ?? [];
+
+      const recentWindow = normalizedInputCandles.slice(-Math.min(120, normalizedInputCandles.length));
+      const averageRecentRange =
+        recentWindow.length > 0
+          ? recentWindow.reduce((sum, candle) => sum + Math.max(0, candle.high - candle.low), 0) /
+            recentWindow.length
+          : 0;
+      const anchorMagnitude = Math.max(Math.abs(anchorClose), 1);
+      const wickRangeCap = Math.max(
+        averageRecentRange * 3,
+        anchorMagnitude * forecastRangeCapRatio(timeframe),
+      );
 
       const forecastCandles: CandlestickData<UTCTimestamp>[] = [];
       const highDots: LineData<UTCTimestamp>[] = [];
@@ -743,18 +809,30 @@ export default function TradingChart({
         const rangeHigh = Number.isFinite(confidenceHigh) ? confidenceHigh : fallbackHigh;
         const rangeLow = Number.isFinite(confidenceLow) ? confidenceLow : fallbackLow;
 
-        const high = Math.max(open, close, rangeHigh);
-        const low = Math.min(open, close, rangeLow);
+        const bodyHigh = Math.max(open, close);
+        const bodyLow = Math.min(open, close);
+        const rawHigh = Math.max(bodyHigh, rangeHigh);
+        const rawLow = Math.min(bodyLow, rangeLow);
+        const cappedHigh = Math.min(rawHigh, bodyHigh + wickRangeCap);
+        const cappedLow = Math.max(rawLow, bodyLow - wickRangeCap);
+        const high = Math.max(bodyHigh, cappedHigh);
+        const low = Math.min(bodyLow, cappedLow);
 
         forecastCandles.push({ time, open, high, low, close });
-        highDots.push({ time, value: high });
-        lowDots.push({ time, value: low });
+        if (index === prediction.prediction_array.length - 1) {
+          highDots.push({ time, value: high });
+          lowDots.push({ time, value: low });
+        }
       }
 
       forecastCandleSeriesRef.current.setData(forecastCandles);
       predictionHighDotSeriesRef.current.setData(highDots);
       predictionLowDotSeriesRef.current.setData(lowDots);
     } else {
+      candleSeriesRef.current.applyOptions({
+        priceLineVisible: true,
+        lastValueVisible: true,
+      });
       forecastCandleSeriesRef.current.setData([]);
       currentBaselineSeriesRef.current.setData([]);
       predictionLineSeriesRef.current.setData([]);

@@ -137,6 +137,15 @@ export default function PredictionPanel({
         </p>
       </div>
 
+      <button
+        type="button"
+        onClick={onPredict}
+        disabled={loading}
+        className="mt-3 rounded-xl border border-cyan-300/70 bg-cyan-500/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {loading ? "Generating forecast..." : "Generate prediction"}
+      </button>
+
       <div className="mt-4 grid grid-cols-2 gap-3">
         <div className="rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-3">
           <p className="muted-label">Current</p>
@@ -227,15 +236,6 @@ export default function PredictionPanel({
             : "External sentiment is fetched from live macro/news/social feeds per prediction."}
         </p>
       </div>
-
-      <button
-        type="button"
-        onClick={onPredict}
-        disabled={loading}
-        className="mt-4 rounded-xl border border-cyan-300/70 bg-cyan-500/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {loading ? "Generating forecast..." : "Generate prediction"}
-      </button>
 
       <details className="mt-4 rounded-xl border border-violet-400/20 bg-cosmic-900/45 p-3">
         <summary className="cursor-pointer text-sm font-semibold text-violet-100/90">Model Note</summary>
