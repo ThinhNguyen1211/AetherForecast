@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CandlestickData,
   ColorType,
@@ -25,6 +25,7 @@ interface TradingChartProps {
   onRequestOlderCandles?: (oldestTimestamp: string) => void;
   isLoadingOlder?: boolean;
   isSyncing?: boolean;
+  isPredicting?: boolean;
 }
 
 interface IndicatorLine {
@@ -115,13 +116,18 @@ function timeframeSeconds(timeframe: string): number {
   }
 }
 
-function isNearRealtime(range: LogicalRange, candleCount: number, toleranceBars = 2): boolean {
+function isNearRealtime(
+  range: LogicalRange,
+  candleCount: number,
+  toleranceBars = 2,
+  futureToleranceBars = 0.2,
+): boolean {
   if (candleCount <= 0) {
     return true;
   }
 
   const lastLogicalIndex = candleCount - 1;
-  return range.to >= lastLogicalIndex - toleranceBars;
+  return range.to >= lastLogicalIndex - toleranceBars && range.to <= lastLogicalIndex + futureToleranceBars;
 }
 
 function calculateSma(candles: Candle[], period = 20): IndicatorLine[] {
@@ -266,6 +272,7 @@ export default function TradingChart({
   onRequestOlderCandles,
   isLoadingOlder = false,
   isSyncing = false,
+  isPredicting = false,
 }: TradingChartProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const mainChartRef = useRef<HTMLDivElement | null>(null);
@@ -299,7 +306,33 @@ export default function TradingChart({
   const normalizedCandlesRef = useRef<Candle[]>([]);
   const loadOlderCallbackRef = useRef<((oldestTimestamp: string) => void) | null>(null);
   const loadingOlderRef = useRef(false);
+  const syncOverlayTimeoutRef = useRef<number | null>(null);
+  const [syncOverlayVisible, setSyncOverlayVisible] = useState(isSyncing);
   const normalizedInputCandles = useMemo(() => sanitizeCandles(candles), [candles]);
+
+  useEffect(() => {
+    if (syncOverlayTimeoutRef.current !== null) {
+      window.clearTimeout(syncOverlayTimeoutRef.current);
+      syncOverlayTimeoutRef.current = null;
+    }
+
+    if (isSyncing) {
+      setSyncOverlayVisible(true);
+      return;
+    }
+
+    syncOverlayTimeoutRef.current = window.setTimeout(() => {
+      setSyncOverlayVisible(false);
+      syncOverlayTimeoutRef.current = null;
+    }, 280);
+
+    return () => {
+      if (syncOverlayTimeoutRef.current !== null) {
+        window.clearTimeout(syncOverlayTimeoutRef.current);
+        syncOverlayTimeoutRef.current = null;
+      }
+    };
+  }, [isSyncing]);
 
   useEffect(() => {
     normalizedCandlesRef.current = normalizedInputCandles;
@@ -499,8 +532,9 @@ export default function TradingChart({
       const currentCandles = normalizedCandlesRef.current;
       if (range && currentCandles.length > 0) {
         const lastLogicalIndex = currentCandles.length - 1;
-        const movedIntoFuture = range.to > lastLogicalIndex + 1 || range.from > lastLogicalIndex + 0.25;
-        shouldAutoFollowRef.current = !movedIntoFuture && isNearRealtime(range, currentCandles.length);
+        const movedIntoFuture = range.to > lastLogicalIndex + 0.2;
+        const nearRealtime = isNearRealtime(range, currentCandles.length);
+        shouldAutoFollowRef.current = nearRealtime && !movedIntoFuture;
       }
 
       const loadOlder = loadOlderCallbackRef.current;
@@ -699,7 +733,14 @@ export default function TradingChart({
       shouldAutoFollowRef.current = true;
     } else {
       const latestMainRange = mainChartApiRef.current.timeScale().getVisibleLogicalRange();
-      if (latestMainRange && !isNearRealtime(latestMainRange, normalizedInputCandles.length)) {
+      const currentlyInFuture =
+        latestMainRange !== null &&
+        latestMainRange.to > normalizedInputCandles.length - 1 + 0.2;
+
+      if (
+        latestMainRange &&
+        (!isNearRealtime(latestMainRange, normalizedInputCandles.length) || currentlyInFuture)
+      ) {
         shouldAutoFollowRef.current = false;
       }
 
@@ -711,7 +752,7 @@ export default function TradingChart({
         (normalizedInputCandles.length > lastRenderedLengthRef.current ||
           latestTimeMs > lastRenderedLastTimeRef.current);
 
-      if (!loadingOlderRef.current && shouldAutoFollowRef.current && hasNewRightEdgeData) {
+      if (!loadingOlderRef.current && shouldAutoFollowRef.current && hasNewRightEdgeData && !currentlyInFuture) {
         mainChartApiRef.current.timeScale().scrollToRealTime();
         rsiChartApiRef.current.timeScale().scrollToRealTime();
         macdChartApiRef.current.timeScale().scrollToRealTime();
@@ -757,17 +798,18 @@ export default function TradingChart({
     );
   }, [normalizedInputCandles, timeframe, prediction, predictionAnchor]);
 
-  const showNoDataMessage = candles.length === 0 && !isSyncing;
-  const showInvalidDataMessage = candles.length > 0 && normalizedInputCandles.length === 0 && !isSyncing;
+  const showNoDataMessage = candles.length === 0 && !syncOverlayVisible && !isPredicting;
+  const showInvalidDataMessage =
+    candles.length > 0 && normalizedInputCandles.length === 0 && !syncOverlayVisible && !isPredicting;
 
   return (
     <div ref={wrapperRef} className="relative space-y-2">
-      {isSyncing && (
+      {(syncOverlayVisible || isPredicting) && (
         <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-xl border border-cyan-300/20 bg-cosmic-900/40 backdrop-blur-[1px]">
           <div className="flex items-center gap-3 rounded-full border border-cyan-300/40 bg-cosmic-900/85 px-4 py-2 text-xs font-medium text-cyan-100">
             <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-cyan-300" />
             <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-cyan-200/30 border-t-cyan-200" />
-            <span>Syncing chart data...</span>
+            <span>{isPredicting ? "Generating prediction..." : "Syncing chart data..."}</span>
           </div>
         </div>
       )}

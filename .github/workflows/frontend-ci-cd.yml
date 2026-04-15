@@ -127,6 +127,21 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  frontend-deploy:
+    name: Deploy Frontend (Main)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_GITHUB_OIDC_ROLE_ARN != '' && vars.FRONTEND_S3_BUCKET != '' && vars.CLOUDFRONT_DISTRIBUTION_ID != ''
+    needs: frontend-build
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/reusable-deploy-frontend.yml
+    with:
+      aws-region: ap-southeast-1
+      role-to-assume: ${{ vars.AWS_GITHUB_OIDC_ROLE_ARN }}
+      artifact-name: frontend-dist
+      s3-bucket: ${{ vars.FRONTEND_S3_BUCKET }}
+      cloudfront-distribution-id: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+
   frontend-summary:
     name: Frontend CI Summary
     runs-on: ubuntu-latest

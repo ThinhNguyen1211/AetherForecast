@@ -24,13 +24,13 @@ import {
 } from "@/services/api";
 
 const HISTORICAL_LIMIT_BY_TIMEFRAME: Record<Timeframe, number> = {
-  "1m": 1200,
-  "5m": 1300,
-  "15m": 1400,
-  "1h": 1500,
-  "4h": 1600,
-  "1d": 1400,
-  "1w": 1000,
+  "1m": 900,
+  "5m": 950,
+  "15m": 1050,
+  "1h": 1150,
+  "4h": 1250,
+  "1d": 1000,
+  "1w": 800,
 };
 const MAX_CANDLE_BUFFER = 12000;
 const BINANCE_TICKER_REFRESH_MS = 45_000;
@@ -50,6 +50,10 @@ function isSupportedTimeframe(value: unknown): value is Timeframe {
 
 function timeframeChartLimit(timeframe: Timeframe): number {
   return HISTORICAL_LIMIT_BY_TIMEFRAME[timeframe] ?? 1500;
+}
+
+function timeframeOlderPageLimit(timeframe: Timeframe): number {
+  return Math.max(280, Math.floor(timeframeChartLimit(timeframe) * 0.45));
 }
 
 function toEpochMs(timestamp: string): number {
@@ -359,7 +363,7 @@ export default function Dashboard() {
         const olderCandles = await fetchChart(
           symbol,
           timeframe,
-          timeframeChartLimit(timeframe),
+          timeframeOlderPageLimit(timeframe),
           oldestTimestamp,
         );
 
@@ -421,7 +425,19 @@ export default function Dashboard() {
     setErrorMessage("");
 
     try {
-      const latestCandles = chartCandles.slice(-500);
+      const freshSnapshotLimit = Math.max(240, Math.min(1200, timeframeChartLimit(timeframe)));
+      const freshestChartCandles = await fetchChart(symbol, timeframe, freshSnapshotLimit);
+      const predictionSource = freshestChartCandles.length > 0 ? freshestChartCandles : chartCandles;
+
+      if (predictionSource.length < 20) {
+        throw new Error("Prediction requires at least 20 candles in chart data.");
+      }
+
+      if (freshestChartCandles.length > 0) {
+        setChartCandles((previous) => mergeCandles(previous, freshestChartCandles));
+      }
+
+      const latestCandles = predictionSource.slice(-500);
       const result = await fetchPrediction({
         symbol,
         timeframe,
@@ -429,7 +445,7 @@ export default function Dashboard() {
         horizon: selectedHorizonBars,
       });
 
-      const anchorCandle = latestCandles[latestCandles.length - 1];
+      const anchorCandle = predictionSource[predictionSource.length - 1];
       const anchor = {
         baseTimestamp: anchorCandle.timestamp,
         baseClose: anchorCandle.close,
@@ -455,6 +471,7 @@ export default function Dashboard() {
     symbol,
     timeframe,
     selectedHorizonBars,
+    setChartCandles,
     setLoadingPrediction,
     setErrorMessage,
     setPrediction,
@@ -708,6 +725,7 @@ export default function Dashboard() {
               onRequestOlderCandles={loadOlderCandles}
               isLoadingOlder={loadingOlderCandles}
               isSyncing={loadingChart || loadingOlderCandles || wsStatus === "connecting"}
+              isPredicting={loadingPrediction}
             />
           </section>
 
