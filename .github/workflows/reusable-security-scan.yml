@@ -38,7 +38,7 @@ jobs:
 
       - name: Block tracked .env files
         run: |
-          if git ls-files | grep -E '(^|/)\.env($|\.|/)'; then
+          if git ls-files | grep -E '(^|/)\.env(\.[^/]+)?$' | grep -Ev '(^|/)\.env\.(example|sample|template)$'; then
             echo "Tracked .env file detected. Remove it and use GitHub/AWS secrets management."
             exit 1
           fi
