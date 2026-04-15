@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   CandlestickData,
   ColorType,
@@ -7,12 +7,11 @@ import {
   LineData,
   LineStyle,
   LogicalRange,
-  SeriesMarker,
   UTCTimestamp,
   createChart,
 } from "lightweight-charts";
 
-import { Candle, PatternMarker as ApiPatternMarker, PredictResponse } from "@/services/api";
+import { Candle, PredictResponse } from "@/services/api";
 
 interface TradingChartProps {
   symbol: string;
@@ -131,39 +130,6 @@ function isNearRealtime(
   return range.to >= lastLogicalIndex - toleranceBars && range.to <= lastLogicalIndex + futureToleranceBars;
 }
 
-function calculateSma(candles: Candle[], period = 20): IndicatorLine[] {
-  const output: IndicatorLine[] = [];
-  for (let index = period - 1; index < candles.length; index += 1) {
-    const subset = candles.slice(index - period + 1, index + 1);
-    const avg = subset.reduce((sum, candle) => sum + candle.close, 0) / period;
-    output.push({ time: toUnix(candles[index].timestamp), value: avg });
-  }
-  return output;
-}
-
-function calculateBollinger(
-  candles: Candle[],
-  period = 20,
-  multiplier = 2,
-): { upper: IndicatorLine[]; lower: IndicatorLine[] } {
-  const upper: IndicatorLine[] = [];
-  const lower: IndicatorLine[] = [];
-
-  for (let index = period - 1; index < candles.length; index += 1) {
-    const subset = candles.slice(index - period + 1, index + 1);
-    const avg = subset.reduce((sum, candle) => sum + candle.close, 0) / period;
-    const variance =
-      subset.reduce((sum, candle) => sum + (candle.close - avg) ** 2, 0) / subset.length;
-    const stdev = Math.sqrt(variance);
-    const time = toUnix(candles[index].timestamp);
-
-    upper.push({ time, value: avg + multiplier * stdev });
-    lower.push({ time, value: avg - multiplier * stdev });
-  }
-
-  return { upper, lower };
-}
-
 function calculateRsi(candles: Candle[], period = 14): IndicatorLine[] {
   if (candles.length <= period) {
     return [];
@@ -264,47 +230,6 @@ function calculateMacd(candles: Candle[]): {
   return { signal, histogram };
 }
 
-function toPatternMarkerLabel(pattern: string): string {
-  const normalized = pattern.replace(/_/g, " ").trim();
-  if (!normalized) {
-    return "Pattern";
-  }
-  return normalized
-    .split(" ")
-    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
-    .join(" ");
-}
-
-function toSeriesMarker(marker: ApiPatternMarker): SeriesMarker<UTCTimestamp> {
-  if (marker.direction === "bullish") {
-    return {
-      time: toUnix(marker.timestamp),
-      position: "belowBar",
-      color: "#00e6d2",
-      shape: "arrowUp",
-      text: toPatternMarkerLabel(marker.pattern),
-    };
-  }
-
-  if (marker.direction === "bearish") {
-    return {
-      time: toUnix(marker.timestamp),
-      position: "aboveBar",
-      color: "#ff5a8e",
-      shape: "arrowDown",
-      text: toPatternMarkerLabel(marker.pattern),
-    };
-  }
-
-  return {
-    time: toUnix(marker.timestamp),
-    position: "inBar",
-    color: "#f8c13a",
-    shape: "circle",
-    text: toPatternMarkerLabel(marker.pattern),
-  };
-}
-
 export default function TradingChart({
   symbol,
   candles,
@@ -327,16 +252,9 @@ export default function TradingChart({
   const macdChartApiRef = useRef<IChartApi | null>(null);
 
   const candleSeriesRef = useRef<ReturnType<IChartApi["addCandlestickSeries"]> | null>(null);
-  const maSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const upperBandSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const lowerBandSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
+  const forecastCandleSeriesRef = useRef<ReturnType<IChartApi["addCandlestickSeries"]> | null>(null);
+  const currentBaselineSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
   const predictionLineSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const predictionUpperSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const predictionLowerSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const volatilityUpperSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const volatilityLowerSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const volatilityUpperSecondarySeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const volatilityLowerSecondarySeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
 
   const rsiSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
   const macdHistogramRef = useRef<ReturnType<IChartApi["addHistogramSeries"]> | null>(null);
@@ -352,34 +270,8 @@ export default function TradingChart({
   const normalizedCandlesRef = useRef<Candle[]>([]);
   const loadOlderCallbackRef = useRef<((oldestTimestamp: string) => void) | null>(null);
   const loadingOlderRef = useRef(false);
-  const syncOverlayTimeoutRef = useRef<number | null>(null);
   const normalizedInputCandles = useMemo(() => sanitizeCandles(candles), [candles]);
-  const isPrimarySyncing = isSyncing && normalizedInputCandles.length === 0;
-  const [syncOverlayVisible, setSyncOverlayVisible] = useState(isPrimarySyncing);
-
-  useEffect(() => {
-    if (syncOverlayTimeoutRef.current !== null) {
-      window.clearTimeout(syncOverlayTimeoutRef.current);
-      syncOverlayTimeoutRef.current = null;
-    }
-
-    if (isPrimarySyncing) {
-      setSyncOverlayVisible(true);
-      return;
-    }
-
-    syncOverlayTimeoutRef.current = window.setTimeout(() => {
-      setSyncOverlayVisible(false);
-      syncOverlayTimeoutRef.current = null;
-    }, 280);
-
-    return () => {
-      if (syncOverlayTimeoutRef.current !== null) {
-        window.clearTimeout(syncOverlayTimeoutRef.current);
-        syncOverlayTimeoutRef.current = null;
-      }
-    };
-  }, [isPrimarySyncing]);
+  const syncOverlayVisible = isSyncing;
 
   useEffect(() => {
     normalizedCandlesRef.current = normalizedInputCandles;
@@ -444,74 +336,40 @@ export default function TradingChart({
     });
     candleSeriesRef.current = candleSeries;
 
-    const maSeries = mainChart.addLineSeries({
-      color: "#00ffff",
-      lineWidth: 1,
+    const forecastCandleSeries = mainChart.addCandlestickSeries({
+      upColor: "rgba(140,82,255,0.45)",
+      downColor: "rgba(140,82,255,0.45)",
+      wickUpColor: "rgba(140,82,255,0.95)",
+      wickDownColor: "rgba(140,82,255,0.95)",
+      borderUpColor: "rgba(140,82,255,0.9)",
+      borderDownColor: "rgba(140,82,255,0.9)",
+      priceLineVisible: false,
+      lastValueVisible: false,
+      priceFormat: {
+        type: "price",
+        precision: 6,
+        minMove: 0.000001,
+      },
     });
-    maSeriesRef.current = maSeries;
+    forecastCandleSeriesRef.current = forecastCandleSeries;
 
-    const upperBandSeries = mainChart.addLineSeries({
-      color: "rgba(176,136,245,0.72)",
+    const currentBaselineSeries = mainChart.addLineSeries({
+      color: "rgba(0, 255, 255, 0.85)",
       lineWidth: 1,
       lineStyle: LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
     });
-    upperBandSeriesRef.current = upperBandSeries;
-
-    const lowerBandSeries = mainChart.addLineSeries({
-      color: "rgba(176,136,245,0.72)",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dashed,
-    });
-    lowerBandSeriesRef.current = lowerBandSeries;
+    currentBaselineSeriesRef.current = currentBaselineSeries;
 
     const predictionLineSeries = mainChart.addLineSeries({
       color: "#8c52ff",
       lineWidth: 2,
       lineStyle: LineStyle.Solid,
+      priceLineVisible: false,
+      lastValueVisible: false,
     });
     predictionLineSeriesRef.current = predictionLineSeries;
-
-    const predictionUpperSeries = mainChart.addLineSeries({
-      color: "rgba(0,255,255,0.55)",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dotted,
-    });
-    predictionUpperSeriesRef.current = predictionUpperSeries;
-
-    const predictionLowerSeries = mainChart.addLineSeries({
-      color: "rgba(0,255,255,0.55)",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dotted,
-    });
-    predictionLowerSeriesRef.current = predictionLowerSeries;
-
-    const volatilityUpperSeries = mainChart.addLineSeries({
-      color: "rgba(255, 193, 7, 0.75)",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dashed,
-    });
-    volatilityUpperSeriesRef.current = volatilityUpperSeries;
-
-    const volatilityLowerSeries = mainChart.addLineSeries({
-      color: "rgba(255, 193, 7, 0.75)",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dashed,
-    });
-    volatilityLowerSeriesRef.current = volatilityLowerSeries;
-
-    const volatilityUpperSecondarySeries = mainChart.addLineSeries({
-      color: "rgba(255, 152, 0, 0.45)",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dotted,
-    });
-    volatilityUpperSecondarySeriesRef.current = volatilityUpperSecondarySeries;
-
-    const volatilityLowerSecondarySeries = mainChart.addLineSeries({
-      color: "rgba(255, 152, 0, 0.45)",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dotted,
-    });
-    volatilityLowerSecondarySeriesRef.current = volatilityLowerSecondarySeries;
 
     const rsiChart = createChart(rsiChartRef.current, {
       ...sharedOptions,
@@ -585,16 +443,9 @@ export default function TradingChart({
       rsiChartApiRef.current = null;
       macdChartApiRef.current = null;
       candleSeriesRef.current = null;
-      maSeriesRef.current = null;
-      upperBandSeriesRef.current = null;
-      lowerBandSeriesRef.current = null;
+      forecastCandleSeriesRef.current = null;
+      currentBaselineSeriesRef.current = null;
       predictionLineSeriesRef.current = null;
-      predictionUpperSeriesRef.current = null;
-      predictionLowerSeriesRef.current = null;
-      volatilityUpperSeriesRef.current = null;
-      volatilityLowerSeriesRef.current = null;
-      volatilityUpperSecondarySeriesRef.current = null;
-      volatilityLowerSecondarySeriesRef.current = null;
       rsiSeriesRef.current = null;
       macdHistogramRef.current = null;
       macdSignalRef.current = null;
@@ -667,16 +518,9 @@ export default function TradingChart({
   useEffect(() => {
     if (
       !candleSeriesRef.current ||
-      !maSeriesRef.current ||
-      !upperBandSeriesRef.current ||
-      !lowerBandSeriesRef.current ||
+      !forecastCandleSeriesRef.current ||
+      !currentBaselineSeriesRef.current ||
       !predictionLineSeriesRef.current ||
-      !predictionUpperSeriesRef.current ||
-      !predictionLowerSeriesRef.current ||
-      !volatilityUpperSeriesRef.current ||
-      !volatilityLowerSeriesRef.current ||
-      !volatilityUpperSecondarySeriesRef.current ||
-      !volatilityLowerSecondarySeriesRef.current ||
       !rsiSeriesRef.current ||
       !macdHistogramRef.current ||
       !macdSignalRef.current ||
@@ -689,17 +533,9 @@ export default function TradingChart({
 
     if (normalizedInputCandles.length === 0) {
       candleSeriesRef.current.setData([]);
-      maSeriesRef.current.setData([]);
-      upperBandSeriesRef.current.setData([]);
-      lowerBandSeriesRef.current.setData([]);
+      forecastCandleSeriesRef.current.setData([]);
+      currentBaselineSeriesRef.current.setData([]);
       predictionLineSeriesRef.current.setData([]);
-      predictionUpperSeriesRef.current.setData([]);
-      predictionLowerSeriesRef.current.setData([]);
-      volatilityUpperSeriesRef.current.setData([]);
-      volatilityLowerSeriesRef.current.setData([]);
-      volatilityUpperSecondarySeriesRef.current.setData([]);
-      volatilityLowerSecondarySeriesRef.current.setData([]);
-      candleSeriesRef.current.setMarkers([]);
       rsiSeriesRef.current.setData([]);
       macdHistogramRef.current.setData([]);
       macdSignalRef.current.setData([]);
@@ -724,11 +560,6 @@ export default function TradingChart({
     }));
 
     candleSeriesRef.current.setData(candleData);
-    maSeriesRef.current.setData(calculateSma(normalizedInputCandles, 20));
-
-    const bollinger = calculateBollinger(normalizedInputCandles, 20, 2);
-    upperBandSeriesRef.current.setData(bollinger.upper);
-    lowerBandSeriesRef.current.setData(bollinger.lower);
 
     if (prediction && normalizedInputCandles.length > 0 && prediction.prediction_array.length > 0) {
       const lastCandle = normalizedInputCandles[normalizedInputCandles.length - 1];
@@ -749,85 +580,67 @@ export default function TradingChart({
         });
       }
 
+      predictionLineSeriesRef.current.setData(forecastSeries);
+
+      const baselineEndTime = (anchorTime + prediction.prediction_array.length * stepSeconds) as UTCTimestamp;
+      currentBaselineSeriesRef.current.setData([
+        { time: anchorTime, value: anchorClose },
+        { time: baselineEndTime, value: anchorClose },
+      ]);
+
       const sortedBands = [...(prediction.confidence_bands ?? [])].sort(
         (left, right) => left.quantile - right.quantile,
       );
       const lowerValues = sortedBands[0]?.values ?? [];
       const upperValues = sortedBands[sortedBands.length - 1]?.values ?? [];
 
-      const lowerSeries: LineData<UTCTimestamp>[] = [{ time: anchorTime, value: anchorClose }];
-      const upperSeries: LineData<UTCTimestamp>[] = [{ time: anchorTime, value: anchorClose }];
+      const primaryVolatilityBand = prediction.volatility_bands?.[0];
+      const volatilityLowerValues = primaryVolatilityBand?.lower ?? [];
+      const volatilityUpperValues = primaryVolatilityBand?.upper ?? [];
 
+      const forecastCandles: CandlestickData<UTCTimestamp>[] = [];
       for (let index = 0; index < prediction.prediction_array.length; index += 1) {
         const time = (anchorTime + (index + 1) * stepSeconds) as UTCTimestamp;
-        const lowerValue =
+        const open = index === 0 ? anchorClose : prediction.prediction_array[index - 1];
+        const close = prediction.prediction_array[index];
+
+        const confidenceLow =
           index < lowerValues.length
             ? lowerValues[index]
             : lowerValues.length > 0
               ? lowerValues[lowerValues.length - 1]
               : prediction.confidence_interval.lower;
-        const upperValue =
+        const confidenceHigh =
           index < upperValues.length
             ? upperValues[index]
             : upperValues.length > 0
               ? upperValues[upperValues.length - 1]
               : prediction.confidence_interval.upper;
 
-        lowerSeries.push({ time, value: lowerValue });
-        upperSeries.push({ time, value: upperValue });
+        const volatilityLow =
+          index < volatilityLowerValues.length
+            ? volatilityLowerValues[index]
+            : volatilityLowerValues.length > 0
+              ? volatilityLowerValues[volatilityLowerValues.length - 1]
+              : confidenceLow;
+        const volatilityHigh =
+          index < volatilityUpperValues.length
+            ? volatilityUpperValues[index]
+            : volatilityUpperValues.length > 0
+              ? volatilityUpperValues[volatilityUpperValues.length - 1]
+              : confidenceHigh;
+
+        const high = Math.max(open, close, confidenceHigh, volatilityHigh);
+        const low = Math.min(open, close, confidenceLow, volatilityLow);
+
+        forecastCandles.push({ time, open, high, low, close });
       }
 
-      predictionLineSeriesRef.current.setData(forecastSeries);
-      predictionUpperSeriesRef.current.setData(upperSeries);
-      predictionLowerSeriesRef.current.setData(lowerSeries);
-
-      const markers = [...(prediction.pattern_markers ?? [])]
-        .map((item) => toSeriesMarker(item))
-        .sort((left, right) => Number(left.time) - Number(right.time));
-      candleSeriesRef.current.setMarkers(markers);
-
-      const buildVolatilitySeries = (values: number[]): LineData<UTCTimestamp>[] => {
-        const series: LineData<UTCTimestamp>[] = [{ time: anchorTime, value: anchorClose }];
-        for (let index = 0; index < prediction.prediction_array.length; index += 1) {
-          const value =
-            index < values.length
-              ? values[index]
-              : values.length > 0
-                ? values[values.length - 1]
-                : anchorClose;
-          series.push({
-            time: (anchorTime + (index + 1) * stepSeconds) as UTCTimestamp,
-            value,
-          });
-        }
-        return series;
-      };
-
-      const volatilityBands = prediction.volatility_bands ?? [];
-      const primaryVolatilityBand = volatilityBands[0];
-      const secondaryVolatilityBand = volatilityBands[1];
-
-      volatilityUpperSeriesRef.current.setData(
-        primaryVolatilityBand ? buildVolatilitySeries(primaryVolatilityBand.upper) : [],
-      );
-      volatilityLowerSeriesRef.current.setData(
-        primaryVolatilityBand ? buildVolatilitySeries(primaryVolatilityBand.lower) : [],
-      );
-      volatilityUpperSecondarySeriesRef.current.setData(
-        secondaryVolatilityBand ? buildVolatilitySeries(secondaryVolatilityBand.upper) : [],
-      );
-      volatilityLowerSecondarySeriesRef.current.setData(
-        secondaryVolatilityBand ? buildVolatilitySeries(secondaryVolatilityBand.lower) : [],
-      );
+      forecastCandleSeriesRef.current.setData(forecastCandles);
     } else {
+      forecastCandleSeriesRef.current.setData([]);
+      currentBaselineSeriesRef.current.setData([]);
       predictionLineSeriesRef.current.setData([]);
-      predictionUpperSeriesRef.current.setData([]);
-      predictionLowerSeriesRef.current.setData([]);
-      volatilityUpperSeriesRef.current.setData([]);
-      volatilityLowerSeriesRef.current.setData([]);
-      volatilityUpperSecondarySeriesRef.current.setData([]);
-      volatilityLowerSecondarySeriesRef.current.setData([]);
-      candleSeriesRef.current.setMarkers([]);
     }
 
     rsiSeriesRef.current.setData(calculateRsi(normalizedInputCandles, 14));
@@ -953,6 +766,20 @@ export default function TradingChart({
         </div>
       )}
       <div ref={mainChartRef} className="h-[440px] rounded-xl border border-violet-400/25" />
+      <div className="flex flex-wrap items-center gap-4 px-1 text-[11px] text-violet-200/75">
+        <span className="flex items-center gap-2">
+          <span className="inline-block h-[2px] w-5 bg-cyan-300" />
+          <span>Current baseline</span>
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="inline-block h-[2px] w-5 bg-violet-400" />
+          <span>Prediction (avg close)</span>
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="inline-block h-3 w-3 rounded-sm border border-violet-300/80 bg-violet-500/20" />
+          <span>Forecast range (high/low)</span>
+        </span>
+      </div>
       {isLoadingOlder && (
         <div className="flex items-center gap-2 px-1 text-[11px] text-cyan-200/70">
           <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-cyan-300/90" />

@@ -88,6 +88,17 @@ export default function PredictionPanel({
     prediction?.confidence_interval.upper ??
     null;
 
+  const lowerNextBar = lowerBand?.values[0] ?? prediction?.confidence_interval.lower ?? null;
+  const upperNextBar = upperBand?.values[0] ?? prediction?.confidence_interval.upper ?? null;
+  const avgNextBar =
+    predictedPrice !== null && lowerNextBar !== null && upperNextBar !== null
+      ? (predictedPrice + lowerNextBar + upperNextBar) / 3
+      : predictedPrice;
+  const horizonAverage =
+    prediction && prediction.prediction_array.length > 0
+      ? prediction.prediction_array.reduce((sum, value) => sum + value, 0) / prediction.prediction_array.length
+      : null;
+
   const deltaPct =
     horizonTargetPrice !== null && lastPrice !== null && lastPrice > 0
       ? ((horizonTargetPrice - lastPrice) / lastPrice) * 100
@@ -168,6 +179,35 @@ export default function PredictionPanel({
           {prediction && lowerAtHorizon !== null && upperAtHorizon !== null
             ? `${lowerAtHorizon.toFixed(6)} - ${upperAtHorizon.toFixed(6)} (horizon target)`
             : "Run a prediction to view confidence interval."}
+        </p>
+      </div>
+
+      <div className="mt-3 rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-3">
+        <p className="muted-label">Forecast Candle ({timeframe})</p>
+        <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+          <div className="rounded-md border border-violet-400/20 bg-cosmic-900/70 p-2">
+            <p className="text-violet-200/75">Low</p>
+            <p className="mt-1 font-mono text-violet-50">
+              {lowerNextBar !== null ? lowerNextBar.toFixed(6) : "--"}
+            </p>
+          </div>
+          <div className="rounded-md border border-violet-400/20 bg-cosmic-900/70 p-2">
+            <p className="text-violet-200/75">Avg</p>
+            <p className="mt-1 font-mono text-violet-50">
+              {avgNextBar !== null ? avgNextBar.toFixed(6) : "--"}
+            </p>
+          </div>
+          <div className="rounded-md border border-violet-400/20 bg-cosmic-900/70 p-2">
+            <p className="text-violet-200/75">High</p>
+            <p className="mt-1 font-mono text-violet-50">
+              {upperNextBar !== null ? upperNextBar.toFixed(6) : "--"}
+            </p>
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-violet-200/80">
+          {horizonAverage !== null
+            ? `Horizon average close: ${horizonAverage.toFixed(6)}`
+            : "Run prediction to view low/avg/high per forecast candle."}
         </p>
       </div>
 

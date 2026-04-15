@@ -725,7 +725,7 @@ export default function Dashboard() {
               predictionAnchor={predictionAnchor}
               onRequestOlderCandles={loadOlderCandles}
               isLoadingOlder={loadingOlderCandles}
-              isSyncing={loadingChart || (wsStatus === "connecting" && chartCandles.length === 0)}
+              isSyncing={loadingChart || wsStatus === "connecting"}
               isPredicting={loadingPrediction}
             />
           </section>
