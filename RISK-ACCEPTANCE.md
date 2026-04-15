@@ -1,7 +1,7 @@
 # Risk Acceptance (Temporary)
 
 - Project: AetherForecast
-- Owner: Nguyen
+- Owner: Nguyễn
 - Date: 2026-04-15
 - Validity: 7 days (until 2026-04-22)
 
