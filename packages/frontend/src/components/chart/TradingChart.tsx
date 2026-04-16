@@ -45,6 +45,13 @@ interface ForecastHoverPoint {
   high: number;
 }
 
+interface ForecastOverlayCache {
+  forecastSeries: LineData<UTCTimestamp>[];
+  forecastCandles: CandlestickData<UTCTimestamp>[];
+  hoverPoints: ForecastHoverPoint[];
+  stepSeconds: number;
+}
+
 function parseTimestampMs(timestamp: string): number {
   const direct = new Date(timestamp).getTime();
   if (Number.isFinite(direct)) {
@@ -234,6 +241,36 @@ function timeframeSeconds(timeframe: string): number {
   }
 }
 
+function toCandlestickPoint(candle: Candle): CandlestickData<UTCTimestamp> {
+  return {
+    time: toUnix(candle.timestamp),
+    open: candle.open,
+    high: candle.high,
+    low: candle.low,
+    close: candle.close,
+  };
+}
+
+function buildOverlayCacheKey(
+  prediction: PredictResponse,
+  predictionAnchor: TradingChartProps["predictionAnchor"],
+  timeframe: string,
+): string {
+  const first = prediction.prediction_array[0] ?? 0;
+  const last = prediction.prediction_array[prediction.prediction_array.length - 1] ?? 0;
+  return [
+    timeframe,
+    prediction.generated_at,
+    prediction.horizon,
+    prediction.prediction_array.length,
+    prediction.confidence,
+    first,
+    last,
+    predictionAnchor?.baseTimestamp ?? "",
+    predictionAnchor?.baseClose ?? "",
+  ].join("|");
+}
+
 function isNearRealtime(
   range: LogicalRange,
   candleCount: number,
@@ -393,6 +430,12 @@ export default function TradingChart({
   const loadingOlderRef = useRef(false);
   const forecastHoverPointsRef = useRef<ForecastHoverPoint[]>([]);
   const forecastStepSecondsRef = useRef<number>(timeframeSeconds(timeframe));
+  const isApplyingHoverGuidesRef = useRef(false);
+  const lastHoverGuideIndexRef = useRef<number | null>(null);
+  const lastIndicatorRefreshAtRef = useRef<number>(0);
+  const lastIndicatorCandleTimeRef = useRef<number>(Number.NaN);
+  const overlayCacheKeyRef = useRef("");
+  const overlayCacheRef = useRef<ForecastOverlayCache | null>(null);
   const resolvedTimeZone =
     timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const timeZoneRef = useRef<string>(resolvedTimeZone);
@@ -695,12 +738,29 @@ export default function TradingChart({
     }
 
     const clearHoverGuides = () => {
-      hoverHighGuideSeriesRef.current?.setData([]);
-      hoverMidGuideSeriesRef.current?.setData([]);
-      hoverLowGuideSeriesRef.current?.setData([]);
+      if (lastHoverGuideIndexRef.current === null) {
+        return;
+      }
+      if (isApplyingHoverGuidesRef.current) {
+        return;
+      }
+
+      isApplyingHoverGuidesRef.current = true;
+      try {
+        hoverHighGuideSeriesRef.current?.setData([]);
+        hoverMidGuideSeriesRef.current?.setData([]);
+        hoverLowGuideSeriesRef.current?.setData([]);
+        lastHoverGuideIndexRef.current = null;
+      } finally {
+        isApplyingHoverGuidesRef.current = false;
+      }
     };
 
     const handleCrosshairMove = (param: MouseEventParams<Time>) => {
+      if (isApplyingHoverGuidesRef.current) {
+        return;
+      }
+
       if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0) {
         clearHoverGuides();
         return;
@@ -730,6 +790,10 @@ export default function TradingChart({
       const clampedIndex = Math.max(0, Math.min(forecastPoints.length - 1, rawIndex));
       const point = forecastPoints[clampedIndex];
 
+      if (lastHoverGuideIndexRef.current === clampedIndex) {
+        return;
+      }
+
       if (Math.abs(hoverTime - Number(point.time)) > stepSeconds) {
         clearHoverGuides();
         return;
@@ -739,18 +803,24 @@ export default function TradingChart({
       const left = (Number(point.time) - halfSpan) as UTCTimestamp;
       const right = (Number(point.time) + halfSpan) as UTCTimestamp;
 
-      hoverHighGuideSeriesRef.current?.setData([
-        { time: left, value: point.high },
-        { time: right, value: point.high },
-      ]);
-      hoverMidGuideSeriesRef.current?.setData([
-        { time: left, value: point.mid },
-        { time: right, value: point.mid },
-      ]);
-      hoverLowGuideSeriesRef.current?.setData([
-        { time: left, value: point.low },
-        { time: right, value: point.low },
-      ]);
+      isApplyingHoverGuidesRef.current = true;
+      try {
+        hoverHighGuideSeriesRef.current?.setData([
+          { time: left, value: point.high },
+          { time: right, value: point.high },
+        ]);
+        hoverMidGuideSeriesRef.current?.setData([
+          { time: left, value: point.mid },
+          { time: right, value: point.mid },
+        ]);
+        hoverLowGuideSeriesRef.current?.setData([
+          { time: left, value: point.low },
+          { time: right, value: point.low },
+        ]);
+        lastHoverGuideIndexRef.current = clampedIndex;
+      } finally {
+        isApplyingHoverGuidesRef.current = false;
+      }
     };
 
     mainChart.subscribeCrosshairMove(handleCrosshairMove);
@@ -768,6 +838,12 @@ export default function TradingChart({
     lastRenderedLengthRef.current = 0;
     lastRenderedLastTimeRef.current = Number.NaN;
     lastRenderedFirstTimeRef.current = Number.NaN;
+    lastIndicatorRefreshAtRef.current = 0;
+    lastIndicatorCandleTimeRef.current = Number.NaN;
+    overlayCacheKeyRef.current = "";
+    overlayCacheRef.current = null;
+    lastHoverGuideIndexRef.current = null;
+    isApplyingHoverGuidesRef.current = false;
   }, [timeframe, symbol]);
 
   useEffect(() => {
@@ -808,6 +884,11 @@ export default function TradingChart({
       macdHistogramRef.current.setData([]);
       macdSignalRef.current.setData([]);
       forecastHoverPointsRef.current = [];
+      overlayCacheKeyRef.current = "";
+      overlayCacheRef.current = null;
+      lastIndicatorRefreshAtRef.current = 0;
+      lastIndicatorCandleTimeRef.current = Number.NaN;
+      lastHoverGuideIndexRef.current = null;
       hasInitialFitRef.current = false;
       shouldAutoFollowRef.current = true;
       lastRenderedLengthRef.current = 0;
@@ -816,125 +897,157 @@ export default function TradingChart({
       return;
     }
 
+    const currentFirstTimeMs = parseTimestampMs(normalizedInputCandles[0].timestamp);
+    const previousLength = lastRenderedLengthRef.current;
+    const previousFirstTimeMsForIncremental = lastRenderedFirstTimeRef.current;
+    const canIncrementalCandleUpdate =
+      previousLength > 0 &&
+      Number.isFinite(previousFirstTimeMsForIncremental) &&
+      Number.isFinite(currentFirstTimeMs) &&
+      previousFirstTimeMsForIncremental === currentFirstTimeMs &&
+      normalizedInputCandles.length >= previousLength &&
+      normalizedInputCandles.length - previousLength <= 2;
+
     const mainRangeBeforeUpdate = mainChartApiRef.current.timeScale().getVisibleLogicalRange();
     const rsiRangeBeforeUpdate = rsiChartApiRef.current.timeScale().getVisibleLogicalRange();
     const macdRangeBeforeUpdate = macdChartApiRef.current.timeScale().getVisibleLogicalRange();
 
-    const candleData: CandlestickData<UTCTimestamp>[] = normalizedInputCandles.map((item) => ({
-      time: toUnix(item.timestamp),
-      open: item.open,
-      high: item.high,
-      low: item.low,
-      close: item.close,
-    }));
-
-    candleSeriesRef.current.setData(candleData);
+    if (canIncrementalCandleUpdate) {
+      const startIndex = Math.max(0, previousLength - 1);
+      for (let index = startIndex; index < normalizedInputCandles.length; index += 1) {
+        candleSeriesRef.current.update(toCandlestickPoint(normalizedInputCandles[index]));
+      }
+    } else {
+      candleSeriesRef.current.setData(normalizedInputCandles.map(toCandlestickPoint));
+    }
 
     if (prediction && normalizedInputCandles.length > 0 && prediction.prediction_array.length > 0) {
-      const lastCandle = normalizedInputCandles[normalizedInputCandles.length - 1];
-      const fallbackAnchorTime = toUnix(lastCandle.timestamp);
-      const parsedAnchorMs = predictionAnchor ? parseTimestampMs(predictionAnchor.baseTimestamp) : Number.NaN;
-      const hasValidAnchor = Number.isFinite(parsedAnchorMs) && Number.isFinite(predictionAnchor?.baseClose);
-      const anchorTime = hasValidAnchor
-        ? (Math.floor(parsedAnchorMs / 1000) as UTCTimestamp)
-        : fallbackAnchorTime;
-      const anchorClose = hasValidAnchor ? Number(predictionAnchor?.baseClose) : lastCandle.close;
-      const stepSeconds = timeframeSeconds(timeframe);
-      const forecastSeries: LineData<UTCTimestamp>[] = [{ time: anchorTime, value: anchorClose }];
+      const overlayCacheKey = buildOverlayCacheKey(prediction, predictionAnchor, timeframe);
+      const cachedOverlay = overlayCacheKeyRef.current === overlayCacheKey ? overlayCacheRef.current : null;
 
-      for (let index = 0; index < prediction.prediction_array.length; index += 1) {
-        forecastSeries.push({
-          time: (anchorTime + (index + 1) * stepSeconds) as UTCTimestamp,
-          value: prediction.prediction_array[index],
-        });
+      if (cachedOverlay) {
+        predictionLineSeriesRef.current.setData(cachedOverlay.forecastSeries);
+        forecastCandleSeriesRef.current.setData(cachedOverlay.forecastCandles);
+        hoverHighGuideSeriesRef.current.setData([]);
+        hoverMidGuideSeriesRef.current.setData([]);
+        hoverLowGuideSeriesRef.current.setData([]);
+        forecastHoverPointsRef.current = cachedOverlay.hoverPoints;
+        forecastStepSecondsRef.current = cachedOverlay.stepSeconds;
+      } else {
+        const lastCandle = normalizedInputCandles[normalizedInputCandles.length - 1];
+        const fallbackAnchorTime = toUnix(lastCandle.timestamp);
+        const parsedAnchorMs = predictionAnchor ? parseTimestampMs(predictionAnchor.baseTimestamp) : Number.NaN;
+        const hasValidAnchor = Number.isFinite(parsedAnchorMs) && Number.isFinite(predictionAnchor?.baseClose);
+        const anchorTime = hasValidAnchor
+          ? (Math.floor(parsedAnchorMs / 1000) as UTCTimestamp)
+          : fallbackAnchorTime;
+        const anchorClose = hasValidAnchor ? Number(predictionAnchor?.baseClose) : lastCandle.close;
+        const stepSeconds = timeframeSeconds(timeframe);
+        const forecastSeries: LineData<UTCTimestamp>[] = [{ time: anchorTime, value: anchorClose }];
+
+        for (let index = 0; index < prediction.prediction_array.length; index += 1) {
+          forecastSeries.push({
+            time: (anchorTime + (index + 1) * stepSeconds) as UTCTimestamp,
+            value: prediction.prediction_array[index],
+          });
+        }
+
+        const sortedBands = [...(prediction.confidence_bands ?? [])].sort(
+          (left, right) => left.quantile - right.quantile,
+        );
+        const lowerValues = sortedBands[0]?.values ?? [];
+        const upperValues = sortedBands[sortedBands.length - 1]?.values ?? [];
+
+        const primaryVolatilityBand = prediction.volatility_bands?.[0];
+        const volatilityLowerValues = primaryVolatilityBand?.lower ?? [];
+        const volatilityUpperValues = primaryVolatilityBand?.upper ?? [];
+
+        const recentWindow = normalizedInputCandles.slice(-Math.min(120, normalizedInputCandles.length));
+        const averageRecentRange =
+          recentWindow.length > 0
+            ? recentWindow.reduce((sum, candle) => sum + Math.max(0, candle.high - candle.low), 0) /
+              recentWindow.length
+            : 0;
+        const anchorMagnitude = Math.max(Math.abs(anchorClose), 1);
+        const wickRangeCap = Math.max(
+          averageRecentRange * 3,
+          anchorMagnitude * forecastRangeCapRatio(timeframe),
+        );
+
+        const forecastCandles: CandlestickData<UTCTimestamp>[] = [];
+        const hoverPoints: ForecastHoverPoint[] = [];
+        for (let index = 0; index < prediction.prediction_array.length; index += 1) {
+          const time = (anchorTime + (index + 1) * stepSeconds) as UTCTimestamp;
+          const open = index === 0 ? anchorClose : prediction.prediction_array[index - 1];
+          const close = prediction.prediction_array[index];
+
+          const confidenceLow =
+            index < lowerValues.length
+              ? lowerValues[index]
+              : lowerValues.length > 0
+                ? lowerValues[lowerValues.length - 1]
+                : prediction.confidence_interval.lower;
+          const confidenceHigh =
+            index < upperValues.length
+              ? upperValues[index]
+              : upperValues.length > 0
+                ? upperValues[upperValues.length - 1]
+                : prediction.confidence_interval.upper;
+
+          const volatilityLow =
+            index < volatilityLowerValues.length
+              ? volatilityLowerValues[index]
+              : volatilityLowerValues.length > 0
+                ? volatilityLowerValues[volatilityLowerValues.length - 1]
+                : confidenceLow;
+          const volatilityHigh =
+            index < volatilityUpperValues.length
+              ? volatilityUpperValues[index]
+              : volatilityUpperValues.length > 0
+                ? volatilityUpperValues[volatilityUpperValues.length - 1]
+                : confidenceHigh;
+
+          const fallbackHigh = Number.isFinite(volatilityHigh) ? volatilityHigh : close;
+          const fallbackLow = Number.isFinite(volatilityLow) ? volatilityLow : close;
+          const rangeHigh = Number.isFinite(confidenceHigh) ? confidenceHigh : fallbackHigh;
+          const rangeLow = Number.isFinite(confidenceLow) ? confidenceLow : fallbackLow;
+
+          const bodyHigh = Math.max(open, close);
+          const bodyLow = Math.min(open, close);
+          const rawHigh = Math.max(bodyHigh, rangeHigh);
+          const rawLow = Math.min(bodyLow, rangeLow);
+          const cappedHigh = Math.min(rawHigh, bodyHigh + wickRangeCap);
+          const cappedLow = Math.max(rawLow, bodyLow - wickRangeCap);
+          const high = Math.max(bodyHigh, cappedHigh);
+          const low = Math.min(bodyLow, cappedLow);
+
+          forecastCandles.push({ time, open, high, low, close });
+          hoverPoints.push({
+            time,
+            low,
+            mid: close,
+            high,
+          });
+        }
+
+        const overlayCache: ForecastOverlayCache = {
+          forecastSeries,
+          forecastCandles,
+          hoverPoints,
+          stepSeconds: Math.max(1, stepSeconds),
+        };
+
+        overlayCacheRef.current = overlayCache;
+        overlayCacheKeyRef.current = overlayCacheKey;
+
+        predictionLineSeriesRef.current.setData(overlayCache.forecastSeries);
+        forecastCandleSeriesRef.current.setData(overlayCache.forecastCandles);
+        hoverHighGuideSeriesRef.current.setData([]);
+        hoverMidGuideSeriesRef.current.setData([]);
+        hoverLowGuideSeriesRef.current.setData([]);
+        forecastHoverPointsRef.current = overlayCache.hoverPoints;
+        forecastStepSecondsRef.current = overlayCache.stepSeconds;
       }
-
-      predictionLineSeriesRef.current.setData(forecastSeries);
-
-      const sortedBands = [...(prediction.confidence_bands ?? [])].sort(
-        (left, right) => left.quantile - right.quantile,
-      );
-      const lowerValues = sortedBands[0]?.values ?? [];
-      const upperValues = sortedBands[sortedBands.length - 1]?.values ?? [];
-
-      const primaryVolatilityBand = prediction.volatility_bands?.[0];
-      const volatilityLowerValues = primaryVolatilityBand?.lower ?? [];
-      const volatilityUpperValues = primaryVolatilityBand?.upper ?? [];
-
-      const recentWindow = normalizedInputCandles.slice(-Math.min(120, normalizedInputCandles.length));
-      const averageRecentRange =
-        recentWindow.length > 0
-          ? recentWindow.reduce((sum, candle) => sum + Math.max(0, candle.high - candle.low), 0) /
-            recentWindow.length
-          : 0;
-      const anchorMagnitude = Math.max(Math.abs(anchorClose), 1);
-      const wickRangeCap = Math.max(
-        averageRecentRange * 3,
-        anchorMagnitude * forecastRangeCapRatio(timeframe),
-      );
-
-      const forecastCandles: CandlestickData<UTCTimestamp>[] = [];
-      const hoverPoints: ForecastHoverPoint[] = [];
-      for (let index = 0; index < prediction.prediction_array.length; index += 1) {
-        const time = (anchorTime + (index + 1) * stepSeconds) as UTCTimestamp;
-        const open = index === 0 ? anchorClose : prediction.prediction_array[index - 1];
-        const close = prediction.prediction_array[index];
-
-        const confidenceLow =
-          index < lowerValues.length
-            ? lowerValues[index]
-            : lowerValues.length > 0
-              ? lowerValues[lowerValues.length - 1]
-              : prediction.confidence_interval.lower;
-        const confidenceHigh =
-          index < upperValues.length
-            ? upperValues[index]
-            : upperValues.length > 0
-              ? upperValues[upperValues.length - 1]
-              : prediction.confidence_interval.upper;
-
-        const volatilityLow =
-          index < volatilityLowerValues.length
-            ? volatilityLowerValues[index]
-            : volatilityLowerValues.length > 0
-              ? volatilityLowerValues[volatilityLowerValues.length - 1]
-              : confidenceLow;
-        const volatilityHigh =
-          index < volatilityUpperValues.length
-            ? volatilityUpperValues[index]
-            : volatilityUpperValues.length > 0
-              ? volatilityUpperValues[volatilityUpperValues.length - 1]
-              : confidenceHigh;
-
-        const fallbackHigh = Number.isFinite(volatilityHigh) ? volatilityHigh : close;
-        const fallbackLow = Number.isFinite(volatilityLow) ? volatilityLow : close;
-        const rangeHigh = Number.isFinite(confidenceHigh) ? confidenceHigh : fallbackHigh;
-        const rangeLow = Number.isFinite(confidenceLow) ? confidenceLow : fallbackLow;
-
-        const bodyHigh = Math.max(open, close);
-        const bodyLow = Math.min(open, close);
-        const rawHigh = Math.max(bodyHigh, rangeHigh);
-        const rawLow = Math.min(bodyLow, rangeLow);
-        const cappedHigh = Math.min(rawHigh, bodyHigh + wickRangeCap);
-        const cappedLow = Math.max(rawLow, bodyLow - wickRangeCap);
-        const high = Math.max(bodyHigh, cappedHigh);
-        const low = Math.min(bodyLow, cappedLow);
-
-        forecastCandles.push({ time, open, high, low, close });
-        hoverPoints.push({
-          time,
-          low,
-          mid: close,
-          high,
-        });
-      }
-
-      forecastCandleSeriesRef.current.setData(forecastCandles);
-      hoverHighGuideSeriesRef.current.setData([]);
-      hoverMidGuideSeriesRef.current.setData([]);
-      hoverLowGuideSeriesRef.current.setData([]);
-      forecastHoverPointsRef.current = hoverPoints;
-      forecastStepSecondsRef.current = Math.max(1, stepSeconds);
     } else {
       forecastCandleSeriesRef.current.setData([]);
       predictionLineSeriesRef.current.setData([]);
@@ -942,12 +1055,29 @@ export default function TradingChart({
       hoverMidGuideSeriesRef.current.setData([]);
       hoverLowGuideSeriesRef.current.setData([]);
       forecastHoverPointsRef.current = [];
+      overlayCacheRef.current = null;
+      overlayCacheKeyRef.current = "";
+      lastHoverGuideIndexRef.current = null;
     }
 
-    rsiSeriesRef.current.setData(calculateRsi(normalizedInputCandles, 14));
-    const macd = calculateMacd(normalizedInputCandles);
-    macdHistogramRef.current.setData(macd.histogram);
-    macdSignalRef.current.setData(macd.signal);
+    const latestCandleTimeMs = parseTimestampMs(
+      normalizedInputCandles[normalizedInputCandles.length - 1].timestamp,
+    );
+    const nowMs = Date.now();
+    const shouldRefreshIndicators =
+      !Number.isFinite(lastIndicatorCandleTimeRef.current) ||
+      latestCandleTimeMs > lastIndicatorCandleTimeRef.current ||
+      nowMs - lastIndicatorRefreshAtRef.current >= 900 ||
+      !hasInitialFitRef.current;
+
+    if (shouldRefreshIndicators) {
+      rsiSeriesRef.current.setData(calculateRsi(normalizedInputCandles, 14));
+      const macd = calculateMacd(normalizedInputCandles);
+      macdHistogramRef.current.setData(macd.histogram);
+      macdSignalRef.current.setData(macd.signal);
+      lastIndicatorCandleTimeRef.current = latestCandleTimeMs;
+      lastIndicatorRefreshAtRef.current = nowMs;
+    }
 
     const timeframeChanged = previousTimeframeRef.current !== timeframe;
     previousTimeframeRef.current = timeframe;
@@ -955,7 +1085,6 @@ export default function TradingChart({
       hasInitialFitRef.current = false;
     }
 
-    const currentFirstTimeMs = parseTimestampMs(normalizedInputCandles[0].timestamp);
     const previousFirstTimeMs = lastRenderedFirstTimeRef.current;
     let prependShift = 0;
     if (
@@ -990,9 +1119,7 @@ export default function TradingChart({
         shouldAutoFollowRef.current = false;
       }
 
-      const latestTimeMs = parseTimestampMs(
-        normalizedInputCandles[normalizedInputCandles.length - 1].timestamp,
-      );
+      const latestTimeMs = latestCandleTimeMs;
       const hasNewRightEdgeData =
         Number.isFinite(latestTimeMs) &&
         (normalizedInputCandles.length > lastRenderedLengthRef.current ||

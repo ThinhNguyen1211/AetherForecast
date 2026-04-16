@@ -77,24 +77,32 @@ class ForecastInferenceService:
         patterns: dict[str, np.ndarray] = {}
 
         if talib is not None:
+            def _safe_talib_pattern(name: str) -> np.ndarray | None:
+                function = getattr(talib, name, None)
+                if function is None:
+                    return None
+
+                try:
+                    return np.tanh(function(opens, highs, lows, closes).astype(np.float64) / 100.0)
+                except Exception:
+                    return None
+
             try:
-                patterns = {
-                    "doji": np.tanh(talib.CDLDOJI(opens, highs, lows, closes).astype(np.float64) / 100.0),
-                    "engulfing": np.tanh(talib.CDLENGULFING(opens, highs, lows, closes).astype(np.float64) / 100.0),
-                    "hammer": np.tanh(talib.CDLHAMMER(opens, highs, lows, closes).astype(np.float64) / 100.0),
-                    "shooting_star": np.tanh(
-                        talib.CDLSHOOTINGSTAR(opens, highs, lows, closes).astype(np.float64) / 100.0
-                    ),
-                    "morning_star": np.tanh(
-                        talib.CDLMORNINGSTAR(opens, highs, lows, closes).astype(np.float64) / 100.0
-                    ),
-                    "evening_star": np.tanh(
-                        talib.CDLEVENINGSTAR(opens, highs, lows, closes).astype(np.float64) / 100.0
-                    ),
-                    "hanging_man": np.tanh(
-                        talib.CDLHANGINGMAN(opens, highs, lows, closes).astype(np.float64) / 100.0
-                    ),
-                }
+                for output_name, talib_name in (
+                    ("doji", "CDLDOJI"),
+                    ("engulfing", "CDLENGULFING"),
+                    ("hammer", "CDLHAMMER"),
+                    ("shooting_star", "CDLSHOOTINGSTAR"),
+                    ("morning_star", "CDLMORNINGSTAR"),
+                    ("evening_star", "CDLEVENINGSTAR"),
+                    ("hanging_man", "CDLHANGINGMAN"),
+                    ("three_white_soldiers", "CDL3WHITESOLDIERS"),
+                    ("three_black_crows", "CDL3BLACKCROWS"),
+                    ("marubozu", "CDLMARUBOZU"),
+                ):
+                    value = _safe_talib_pattern(talib_name)
+                    if value is not None:
+                        patterns[output_name] = value
             except Exception as exc:
                 logger.warning("TA-Lib pattern extraction failed in inference: %s", exc)
 
@@ -148,10 +156,28 @@ class ForecastInferenceService:
                     evening_star[idx] = -1.0
 
             hanging_man = np.zeros_like(closes, dtype=np.float64)
+            three_white_soldiers = np.zeros_like(closes, dtype=np.float64)
+            three_black_crows = np.zeros_like(closes, dtype=np.float64)
             for idx in range(3, closes.size):
                 uptrend = closes[idx - 1] > closes[idx - 3]
                 if uptrend and lower_shadow[idx] / candle_range[idx] > 0.55 and upper_shadow[idx] / candle_range[idx] < 0.2:
                     hanging_man[idx] = -1.0
+
+                bullish_chain = closes[idx] > opens[idx] and closes[idx - 1] > opens[idx - 1] and closes[idx - 2] > opens[idx - 2]
+                bearish_chain = closes[idx] < opens[idx] and closes[idx - 1] < opens[idx - 1] and closes[idx - 2] < opens[idx - 2]
+                rising_closes = closes[idx] > closes[idx - 1] > closes[idx - 2]
+                falling_closes = closes[idx] < closes[idx - 1] < closes[idx - 2]
+
+                if bullish_chain and rising_closes:
+                    three_white_soldiers[idx] = 1.0
+                if bearish_chain and falling_closes:
+                    three_black_crows[idx] = -1.0
+
+            marubozu = np.where(
+                (body / candle_range > 0.78) & (upper_shadow / candle_range < 0.08) & (lower_shadow / candle_range < 0.08),
+                np.sign(closes - opens),
+                0.0,
+            )
 
             patterns = {
                 "doji": np.tanh(doji),
@@ -161,16 +187,22 @@ class ForecastInferenceService:
                 "morning_star": np.tanh(morning_star),
                 "evening_star": np.tanh(evening_star),
                 "hanging_man": np.tanh(hanging_man),
+                "three_white_soldiers": np.tanh(three_white_soldiers),
+                "three_black_crows": np.tanh(three_black_crows),
+                "marubozu": np.tanh(marubozu),
             }
 
         # Blend a richer set of candlestick patterns into one compact signal.
         weights = {
-            "engulfing": 0.30,
-            "hammer": 0.15,
-            "shooting_star": 0.15,
-            "morning_star": 0.14,
-            "evening_star": 0.14,
+            "engulfing": 0.22,
+            "hammer": 0.12,
+            "shooting_star": 0.12,
+            "morning_star": 0.12,
+            "evening_star": 0.12,
             "hanging_man": 0.08,
+            "three_white_soldiers": 0.10,
+            "three_black_crows": 0.10,
+            "marubozu": 0.08,
             "doji": 0.04,
         }
         combined = np.zeros_like(closes, dtype=np.float64)
@@ -190,7 +222,7 @@ class ForecastInferenceService:
 
         series = pd.Series(returns, dtype="float64")
         output: dict[str, np.ndarray] = {}
-        for window in (5, 10, 20, 40, 80):
+        for window in (5, 10, 20, 40, 80, 120):
             output[str(window)] = series.rolling(window=window, min_periods=2).std().fillna(0.0).to_numpy(dtype=np.float64)
         return output
 
@@ -200,6 +232,9 @@ class ForecastInferenceService:
         sentiment_score: float | None = None,
         external_sentiment_score: float | None = None,
     ) -> dict[str, Any]:
+        opens = np.asarray([float(item.open) for item in request.latest_candles], dtype=np.float64)
+        highs = np.asarray([float(item.high) for item in request.latest_candles], dtype=np.float64)
+        lows = np.asarray([float(item.low) for item in request.latest_candles], dtype=np.float64)
         closes = np.asarray([float(item.close) for item in request.latest_candles], dtype=np.float64)
         volumes = np.asarray([float(item.volume) for item in request.latest_candles], dtype=np.float64)
         returns = np.zeros_like(closes, dtype=np.float64)
@@ -222,28 +257,69 @@ class ForecastInferenceService:
             .fillna(0.0)
             .to_numpy(dtype=np.float64)
         )
+        momentum_8 = (
+            pd.Series(returns, dtype="float64")
+            .rolling(window=8, min_periods=1)
+            .mean()
+            .fillna(0.0)
+            .to_numpy(dtype=np.float64)
+        )
+
+        fast_ema = pd.Series(closes, dtype="float64").ewm(span=8, adjust=False).mean().to_numpy(dtype=np.float64)
+        slow_ema = pd.Series(closes, dtype="float64").ewm(span=21, adjust=False).mean().to_numpy(dtype=np.float64)
+        trend_strength = (fast_ema - slow_ema) / np.maximum(closes, 1e-8)
+
+        candle_range = np.maximum(highs - lows, 1e-8)
+        body_ratio = (closes - opens) / candle_range
+        upper_shadow = highs - np.maximum(opens, closes)
+        lower_shadow = np.minimum(opens, closes) - lows
+        wick_imbalance = (upper_shadow - lower_shadow) / candle_range
+
+        prev_close = np.roll(closes, 1)
+        prev_close[0] = closes[0]
+        true_range = np.maximum.reduce((highs - lows, np.abs(highs - prev_close), np.abs(lows - prev_close)))
+        atr_14 = (
+            pd.Series(true_range, dtype="float64")
+            .rolling(window=14, min_periods=2)
+            .mean()
+            .bfill()
+            .fillna(0.0)
+            .to_numpy(dtype=np.float64)
+        )
+        atr_norm = atr_14 / np.maximum(closes, 1e-8)
 
         vol_5 = volatility.get("5", np.zeros_like(closes, dtype=np.float64))
         vol_20 = volatility.get("20", np.zeros_like(closes, dtype=np.float64))
         vol_80 = volatility.get("80", np.zeros_like(closes, dtype=np.float64))
+        vol_120 = volatility.get("120", np.zeros_like(closes, dtype=np.float64))
         vol_regime = (vol_5 - vol_20) / np.maximum(vol_80, 1e-6)
+        vol_expansion = (vol_5 / np.maximum(vol_20, 1e-6)) - 1.0
+        vol_persistence = (vol_20 - vol_80) / np.maximum(vol_120 + 1e-6, 1e-6)
 
         sentiment_feature = 0.0
         if sentiment_score is not None:
-            sentiment_feature += max(-1.0, min(1.0, float(sentiment_score))) * 0.006
+            sentiment_feature += max(-1.0, min(1.0, float(sentiment_score))) * 0.008
         if external_sentiment_score is not None:
-            sentiment_feature += max(-1.0, min(1.0, float(external_sentiment_score))) * 0.009
+            sentiment_feature += max(-1.0, min(1.0, float(external_sentiment_score))) * 0.011
 
         for index, close in enumerate(closes):
             pattern_feature = float(pattern_signal[index]) if index < pattern_signal.size else 0.0
+            pattern_impulse = pattern_feature * (1.0 + abs(pattern_feature) * 0.85)
             adjustment = (
-                np.tanh(volume_z[index]) * 0.004
-                + np.tanh(momentum_3[index] * 45.0) * 0.017
-                + np.tanh(vol_regime[index] * 0.9) * 0.034
-                + pattern_feature * 0.021
+                np.tanh(volume_z[index]) * 0.006
+                + np.tanh(momentum_3[index] * 52.0) * 0.016
+                + np.tanh(momentum_8[index] * 34.0) * 0.013
+                + np.tanh(trend_strength[index] * 120.0) * 0.018
+                + np.tanh(vol_regime[index] * 1.05) * 0.024
+                + np.tanh(vol_expansion[index] * 1.30) * 0.017
+                + np.tanh(vol_persistence[index] * 0.95) * 0.011
+                + np.tanh(atr_norm[index] * 7.5) * 0.012
+                + np.tanh(body_ratio[index] * 1.8) * 0.008
+                + np.tanh(wick_imbalance[index] * 1.6) * 0.006
+                + pattern_impulse * 0.029
                 + sentiment_feature
             )
-            adjustment = float(max(-0.12, min(0.12, adjustment)))
+            adjustment = float(max(-0.18, min(0.18, adjustment)))
             context.append(float(close * (1.0 + adjustment)))
 
         # Keep context compact for low-latency CPU inference in Fargate.
@@ -513,12 +589,15 @@ class ForecastInferenceService:
         predicted_returns = np.diff(np.log(safe_median))
         predicted_vol = float(np.std(predicted_returns)) if predicted_returns.size > 1 else 0.0
 
+        hist_micro = self._recent_step_volatility(closes, window=8)
         hist_fast = self._recent_step_volatility(closes, window=20)
         hist_slow = self._recent_step_volatility(closes, window=60)
-        hist_blended = max(1e-6, hist_fast * 0.65 + hist_slow * 0.35)
+        hist_blended = max(1e-6, hist_micro * 0.25 + hist_fast * 0.50 + hist_slow * 0.25)
 
-        target_vol = float(np.clip(hist_blended * 0.90, 0.0006, 0.0600))
-        min_required = target_vol * 0.45
+        vol_regime = float(np.clip(hist_fast / max(hist_slow, 1e-6), 0.60, 1.90))
+        regime_boost = 1.0 + (vol_regime - 1.0) * 0.28
+        target_vol = float(np.clip(hist_blended * regime_boost, 0.0006, 0.0750))
+        min_required = target_vol * 0.40
         if predicted_vol >= min_required:
             return quantile_values
 
@@ -528,26 +607,47 @@ class ForecastInferenceService:
         elif base_returns.size < median.size - 1:
             base_returns = np.pad(base_returns, (0, median.size - 1 - base_returns.size), mode="edge")
 
-        recent_log_returns = np.diff(np.log(np.maximum(closes[-12:], 1e-8))) if closes.size > 12 else np.asarray([])
-        trend_bias = float(np.mean(recent_log_returns)) if recent_log_returns.size > 0 else 0.0
+        recent_log_returns = np.diff(np.log(np.maximum(closes[-16:], 1e-8))) if closes.size > 16 else np.asarray([])
+        short_trend = float(np.mean(recent_log_returns)) if recent_log_returns.size > 0 else 0.0
+
+        lookback = min(48, closes.size)
+        long_trend = 0.0
+        if lookback >= 6:
+            y = np.log(np.maximum(closes[-lookback:], 1e-8))
+            x = np.arange(lookback, dtype=np.float64)
+            slope, _ = np.polyfit(x, y, 1)
+            long_trend = float(slope)
+
+        trend_bias = float(np.clip(short_trend * 0.65 + long_trend * 0.35, -target_vol * 1.4, target_vol * 1.4))
 
         bounded_sentiment = max(-1.0, min(1.0, float(sentiment_score)))
         bounded_external = max(-1.0, min(1.0, float(external_sentiment_score)))
-        sentiment_bias = (bounded_sentiment * 0.25 + bounded_external * 0.35) * target_vol
+        sentiment_bias = (bounded_sentiment * 0.24 + bounded_external * 0.42) * target_vol
 
-        desired_vol = float(np.clip(min_required + (target_vol - min_required) * 0.85, min_required, target_vol * 1.30))
+        desired_vol = float(np.clip(min_required + (target_vol - min_required) * 0.92, min_required, target_vol * 1.45))
         wave_amplitude = math.sqrt(max(desired_vol**2 - predicted_vol**2, 0.0))
 
         steps = np.arange(1, median.size, dtype=np.float64)
-        period = float(max(4, min(10, median.size)))
-        wave = np.sin((2.0 * np.pi * steps) / period) + 0.5 * np.sin((4.0 * np.pi * steps) / period + np.pi / 7.0)
+        period = float(max(5, min(12, median.size)))
+        wave = (
+            np.sin((2.0 * np.pi * steps) / period)
+            + 0.52 * np.sin((4.0 * np.pi * steps) / period + np.pi / 7.0)
+            + 0.27 * np.sin((6.0 * np.pi * steps) / period + np.pi / 5.0)
+        )
         wave_std = float(np.std(wave))
         if wave_std > 1e-8:
             wave = wave / wave_std
 
+        horizon_scale = np.sqrt(steps / max(steps[-1], 1.0))
+        trend_decay = np.exp(-steps / max(float(median.size) * 0.9, 1.0))
+
         adjusted_returns = base_returns.copy()
-        adjusted_returns += wave * wave_amplitude * 0.90
-        adjusted_returns += (trend_bias + sentiment_bias) * 0.35
+        adjusted_returns += wave * wave_amplitude * (0.75 + 0.55 * horizon_scale)
+        adjusted_returns += trend_bias * (0.34 + 0.34 * trend_decay)
+        adjusted_returns += sentiment_bias * 0.44
+
+        cumulative = np.cumsum(adjusted_returns)
+        adjusted_returns += -0.10 * target_vol * np.tanh(cumulative * 6.0)
         adjusted_returns = np.clip(adjusted_returns, -0.25, 0.25)
 
         variance_adjusted = np.empty_like(median)
@@ -555,8 +655,8 @@ class ForecastInferenceService:
         for idx in range(1, median.size):
             variance_adjusted[idx] = max(1e-8, variance_adjusted[idx - 1] * math.exp(float(adjusted_returns[idx - 1])))
 
-        median_updated = np.maximum(median * 0.30 + variance_adjusted * 0.70, 1e-8)
-        spread_scale = float(np.clip(desired_vol / max(predicted_vol, 1e-6), 1.10, 3.00))
+        median_updated = np.maximum(median * 0.22 + variance_adjusted * 0.78, 1e-8)
+        spread_scale = float(np.clip(desired_vol / max(predicted_vol, 1e-6), 1.15, 3.40))
 
         recentered: dict[float, np.ndarray] = {}
         for quantile, values in quantile_values.items():
