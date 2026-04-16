@@ -75,8 +75,21 @@ function chartTimeToDate(time: Time): Date {
     return new Date(Number(time) * 1000);
   }
 
+  if (typeof time === "string") {
+    const normalized = time.includes("T") ? time : `${time}T00:00:00Z`;
+    const parsed = new Date(normalized);
+    if (Number.isFinite(parsed.getTime())) {
+      return parsed;
+    }
+  }
+
   const businessDay = time as BusinessDay;
-  return new Date(Date.UTC(businessDay.year, businessDay.month - 1, businessDay.day));
+  const candidate = new Date(Date.UTC(businessDay.year, businessDay.month - 1, businessDay.day));
+  if (Number.isFinite(candidate.getTime())) {
+    return candidate;
+  }
+
+  return new Date(0);
 }
 
 function chartTimeToUnix(time: Time): UTCTimestamp {
@@ -85,6 +98,10 @@ function chartTimeToUnix(time: Time): UTCTimestamp {
 
 function formatAxisTimeLabel(time: Time, timeZone: string, tickMarkType: TickMarkType): string {
   const date = chartTimeToDate(time);
+  if (!Number.isFinite(date.getTime())) {
+    return "";
+  }
+
   switch (tickMarkType) {
     case TickMarkType.Year:
       return new Intl.DateTimeFormat("vi-VN", {
@@ -123,6 +140,10 @@ function formatAxisTimeLabel(time: Time, timeZone: string, tickMarkType: TickMar
 
 function formatCrosshairTimeLabel(time: Time, timeZone: string): string {
   const date = chartTimeToDate(time);
+  if (!Number.isFinite(date.getTime())) {
+    return "";
+  }
+
   return new Intl.DateTimeFormat("vi-VN", {
     timeZone,
     day: "2-digit",
@@ -692,6 +713,10 @@ export default function TradingChart({
       }
 
       const hoverTime = Number(chartTimeToUnix(param.time));
+      if (!Number.isFinite(hoverTime)) {
+        clearHoverGuides();
+        return;
+      }
       const stepSeconds = Math.max(1, forecastStepSecondsRef.current);
       const firstTime = Number(forecastPoints[0].time);
       const lastTime = Number(forecastPoints[forecastPoints.length - 1].time);
