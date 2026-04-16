@@ -594,10 +594,10 @@ class ForecastInferenceService:
         hist_slow = self._recent_step_volatility(closes, window=60)
         hist_blended = max(1e-6, hist_micro * 0.25 + hist_fast * 0.50 + hist_slow * 0.25)
 
-        vol_regime = float(np.clip(hist_fast / max(hist_slow, 1e-6), 0.60, 1.90))
-        regime_boost = 1.0 + (vol_regime - 1.0) * 0.28
-        target_vol = float(np.clip(hist_blended * regime_boost, 0.0006, 0.0750))
-        min_required = target_vol * 0.40
+        vol_regime = float(np.clip(hist_fast / max(hist_slow, 1e-6), 0.70, 1.65))
+        regime_boost = 1.0 + (vol_regime - 1.0) * 0.18
+        target_vol = float(np.clip(hist_blended * regime_boost, 0.0006, 0.0550))
+        min_required = target_vol * 0.50
         if predicted_vol >= min_required:
             return quantile_values
 
@@ -618,21 +618,21 @@ class ForecastInferenceService:
             slope, _ = np.polyfit(x, y, 1)
             long_trend = float(slope)
 
-        trend_bias = float(np.clip(short_trend * 0.65 + long_trend * 0.35, -target_vol * 1.4, target_vol * 1.4))
+        trend_bias = float(np.clip(short_trend * 0.65 + long_trend * 0.35, -target_vol * 1.1, target_vol * 1.1))
 
         bounded_sentiment = max(-1.0, min(1.0, float(sentiment_score)))
         bounded_external = max(-1.0, min(1.0, float(external_sentiment_score)))
-        sentiment_bias = (bounded_sentiment * 0.24 + bounded_external * 0.42) * target_vol
+        sentiment_bias = (bounded_sentiment * 0.20 + bounded_external * 0.30) * target_vol
 
-        desired_vol = float(np.clip(min_required + (target_vol - min_required) * 0.92, min_required, target_vol * 1.45))
+        desired_vol = float(np.clip(min_required + (target_vol - min_required) * 0.82, min_required, target_vol * 1.22))
         wave_amplitude = math.sqrt(max(desired_vol**2 - predicted_vol**2, 0.0))
 
         steps = np.arange(1, median.size, dtype=np.float64)
-        period = float(max(5, min(12, median.size)))
+        period = float(max(6, min(14, median.size)))
         wave = (
             np.sin((2.0 * np.pi * steps) / period)
-            + 0.52 * np.sin((4.0 * np.pi * steps) / period + np.pi / 7.0)
-            + 0.27 * np.sin((6.0 * np.pi * steps) / period + np.pi / 5.0)
+            + 0.35 * np.sin((4.0 * np.pi * steps) / period + np.pi / 7.0)
+            + 0.14 * np.sin((6.0 * np.pi * steps) / period + np.pi / 5.0)
         )
         wave_std = float(np.std(wave))
         if wave_std > 1e-8:
@@ -642,21 +642,21 @@ class ForecastInferenceService:
         trend_decay = np.exp(-steps / max(float(median.size) * 0.9, 1.0))
 
         adjusted_returns = base_returns.copy()
-        adjusted_returns += wave * wave_amplitude * (0.75 + 0.55 * horizon_scale)
-        adjusted_returns += trend_bias * (0.34 + 0.34 * trend_decay)
-        adjusted_returns += sentiment_bias * 0.44
+        adjusted_returns += wave * wave_amplitude * (0.58 + 0.32 * horizon_scale)
+        adjusted_returns += trend_bias * (0.30 + 0.18 * trend_decay)
+        adjusted_returns += sentiment_bias * 0.30
 
         cumulative = np.cumsum(adjusted_returns)
-        adjusted_returns += -0.10 * target_vol * np.tanh(cumulative * 6.0)
-        adjusted_returns = np.clip(adjusted_returns, -0.25, 0.25)
+        adjusted_returns += -0.14 * target_vol * np.tanh(cumulative * 6.0)
+        adjusted_returns = np.clip(adjusted_returns, -0.18, 0.18)
 
         variance_adjusted = np.empty_like(median)
         variance_adjusted[0] = max(1e-8, median[0])
         for idx in range(1, median.size):
             variance_adjusted[idx] = max(1e-8, variance_adjusted[idx - 1] * math.exp(float(adjusted_returns[idx - 1])))
 
-        median_updated = np.maximum(median * 0.22 + variance_adjusted * 0.78, 1e-8)
-        spread_scale = float(np.clip(desired_vol / max(predicted_vol, 1e-6), 1.15, 3.40))
+        median_updated = np.maximum(median * 0.34 + variance_adjusted * 0.66, 1e-8)
+        spread_scale = float(np.clip(desired_vol / max(predicted_vol, 1e-6), 1.08, 2.20))
 
         recentered: dict[float, np.ndarray] = {}
         for quantile, values in quantile_values.items():

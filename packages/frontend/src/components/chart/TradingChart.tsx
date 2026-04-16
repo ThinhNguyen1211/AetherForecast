@@ -8,7 +8,6 @@ import {
   LineData,
   LineStyle,
   LogicalRange,
-  MouseEventParams,
   TickMarkType,
   Time,
   UTCTimestamp,
@@ -38,18 +37,9 @@ interface IndicatorLine {
   value: number;
 }
 
-interface ForecastHoverPoint {
-  time: UTCTimestamp;
-  low: number;
-  mid: number;
-  high: number;
-}
-
 interface ForecastOverlayCache {
   forecastSeries: LineData<UTCTimestamp>[];
   forecastCandles: CandlestickData<UTCTimestamp>[];
-  hoverPoints: ForecastHoverPoint[];
-  stepSeconds: number;
 }
 
 function parseTimestampMs(timestamp: string): number {
@@ -97,10 +87,6 @@ function chartTimeToDate(time: Time): Date {
   }
 
   return new Date(0);
-}
-
-function chartTimeToUnix(time: Time): UTCTimestamp {
-  return Math.floor(chartTimeToDate(time).getTime() / 1000) as UTCTimestamp;
 }
 
 function formatAxisTimeLabel(time: Time, timeZone: string, tickMarkType: TickMarkType): string {
@@ -165,21 +151,21 @@ function formatCrosshairTimeLabel(time: Time, timeZone: string): string {
 function forecastRangeCapRatio(timeframe: string): number {
   switch (timeframe) {
     case "1m":
-      return 0.0035;
+      return 0.0018;
     case "5m":
-      return 0.005;
+      return 0.0024;
     case "15m":
-      return 0.0075;
+      return 0.0035;
     case "1h":
-      return 0.012;
+      return 0.006;
     case "4h":
-      return 0.02;
+      return 0.01;
     case "1d":
-      return 0.035;
+      return 0.018;
     case "1w":
-      return 0.08;
+      return 0.04;
     default:
-      return 0.012;
+      return 0.006;
   }
 }
 
@@ -410,9 +396,6 @@ export default function TradingChart({
   const candleSeriesRef = useRef<ReturnType<IChartApi["addCandlestickSeries"]> | null>(null);
   const forecastCandleSeriesRef = useRef<ReturnType<IChartApi["addCandlestickSeries"]> | null>(null);
   const predictionLineSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const hoverHighGuideSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const hoverMidGuideSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const hoverLowGuideSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
 
   const rsiSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
   const macdHistogramRef = useRef<ReturnType<IChartApi["addHistogramSeries"]> | null>(null);
@@ -428,10 +411,6 @@ export default function TradingChart({
   const normalizedCandlesRef = useRef<Candle[]>([]);
   const loadOlderCallbackRef = useRef<((oldestTimestamp: string) => void) | null>(null);
   const loadingOlderRef = useRef(false);
-  const forecastHoverPointsRef = useRef<ForecastHoverPoint[]>([]);
-  const forecastStepSecondsRef = useRef<number>(timeframeSeconds(timeframe));
-  const isApplyingHoverGuidesRef = useRef(false);
-  const lastHoverGuideIndexRef = useRef<number | null>(null);
   const lastIndicatorRefreshAtRef = useRef<number>(0);
   const lastIndicatorCandleTimeRef = useRef<number>(Number.NaN);
   const overlayCacheKeyRef = useRef("");
@@ -559,45 +538,6 @@ export default function TradingChart({
     });
     predictionLineSeriesRef.current = predictionLineSeries;
 
-    const hoverHighGuideSeries = mainChart.addLineSeries({
-      color: "rgba(248,193,58,0.45)",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dotted,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: true,
-      crosshairMarkerRadius: 4,
-      crosshairMarkerBorderColor: "#f8c13a",
-      crosshairMarkerBackgroundColor: "#f8c13a",
-    });
-    hoverHighGuideSeriesRef.current = hoverHighGuideSeries;
-
-    const hoverMidGuideSeries = mainChart.addLineSeries({
-      color: "rgba(140,82,255,0.45)",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dotted,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: true,
-      crosshairMarkerRadius: 4,
-      crosshairMarkerBorderColor: "#8c52ff",
-      crosshairMarkerBackgroundColor: "#8c52ff",
-    });
-    hoverMidGuideSeriesRef.current = hoverMidGuideSeries;
-
-    const hoverLowGuideSeries = mainChart.addLineSeries({
-      color: "rgba(52,213,255,0.45)",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dotted,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: true,
-      crosshairMarkerRadius: 4,
-      crosshairMarkerBorderColor: "#34d5ff",
-      crosshairMarkerBackgroundColor: "#34d5ff",
-    });
-    hoverLowGuideSeriesRef.current = hoverLowGuideSeries;
-
     const rsiChart = createChart(rsiChartRef.current, {
       ...sharedOptions,
       height: 145,
@@ -672,9 +612,6 @@ export default function TradingChart({
       candleSeriesRef.current = null;
       forecastCandleSeriesRef.current = null;
       predictionLineSeriesRef.current = null;
-      hoverHighGuideSeriesRef.current = null;
-      hoverMidGuideSeriesRef.current = null;
-      hoverLowGuideSeriesRef.current = null;
       rsiSeriesRef.current = null;
       macdHistogramRef.current = null;
       macdSignalRef.current = null;
@@ -727,111 +664,6 @@ export default function TradingChart({
   }, []);
 
   useEffect(() => {
-    const mainChart = mainChartApiRef.current;
-    if (
-      !mainChart ||
-      !hoverHighGuideSeriesRef.current ||
-      !hoverMidGuideSeriesRef.current ||
-      !hoverLowGuideSeriesRef.current
-    ) {
-      return;
-    }
-
-    const clearHoverGuides = () => {
-      if (lastHoverGuideIndexRef.current === null) {
-        return;
-      }
-      if (isApplyingHoverGuidesRef.current) {
-        return;
-      }
-
-      isApplyingHoverGuidesRef.current = true;
-      try {
-        hoverHighGuideSeriesRef.current?.setData([]);
-        hoverMidGuideSeriesRef.current?.setData([]);
-        hoverLowGuideSeriesRef.current?.setData([]);
-        lastHoverGuideIndexRef.current = null;
-      } finally {
-        isApplyingHoverGuidesRef.current = false;
-      }
-    };
-
-    const handleCrosshairMove = (param: MouseEventParams<Time>) => {
-      if (isApplyingHoverGuidesRef.current) {
-        return;
-      }
-
-      if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0) {
-        clearHoverGuides();
-        return;
-      }
-
-      const forecastPoints = forecastHoverPointsRef.current;
-      if (forecastPoints.length === 0) {
-        clearHoverGuides();
-        return;
-      }
-
-      const hoverTime = Number(chartTimeToUnix(param.time));
-      if (!Number.isFinite(hoverTime)) {
-        clearHoverGuides();
-        return;
-      }
-      const stepSeconds = Math.max(1, forecastStepSecondsRef.current);
-      const firstTime = Number(forecastPoints[0].time);
-      const lastTime = Number(forecastPoints[forecastPoints.length - 1].time);
-
-      if (hoverTime < firstTime - stepSeconds || hoverTime > lastTime + stepSeconds) {
-        clearHoverGuides();
-        return;
-      }
-
-      const rawIndex = Math.round((hoverTime - firstTime) / stepSeconds);
-      const clampedIndex = Math.max(0, Math.min(forecastPoints.length - 1, rawIndex));
-      const point = forecastPoints[clampedIndex];
-
-      if (lastHoverGuideIndexRef.current === clampedIndex) {
-        return;
-      }
-
-      if (Math.abs(hoverTime - Number(point.time)) > stepSeconds) {
-        clearHoverGuides();
-        return;
-      }
-
-      const halfSpan = Math.max(1, Math.floor(stepSeconds * 0.45));
-      const left = (Number(point.time) - halfSpan) as UTCTimestamp;
-      const right = (Number(point.time) + halfSpan) as UTCTimestamp;
-
-      isApplyingHoverGuidesRef.current = true;
-      try {
-        hoverHighGuideSeriesRef.current?.setData([
-          { time: left, value: point.high },
-          { time: right, value: point.high },
-        ]);
-        hoverMidGuideSeriesRef.current?.setData([
-          { time: left, value: point.mid },
-          { time: right, value: point.mid },
-        ]);
-        hoverLowGuideSeriesRef.current?.setData([
-          { time: left, value: point.low },
-          { time: right, value: point.low },
-        ]);
-        lastHoverGuideIndexRef.current = clampedIndex;
-      } finally {
-        isApplyingHoverGuidesRef.current = false;
-      }
-    };
-
-    mainChart.subscribeCrosshairMove(handleCrosshairMove);
-
-    return () => {
-      mainChart.unsubscribeCrosshairMove(handleCrosshairMove);
-      clearHoverGuides();
-    };
-  }, []);
-
-  useEffect(() => {
     lazyLoadAnchorRef.current = null;
     hasInitialFitRef.current = false;
     shouldAutoFollowRef.current = true;
@@ -842,8 +674,6 @@ export default function TradingChart({
     lastIndicatorCandleTimeRef.current = Number.NaN;
     overlayCacheKeyRef.current = "";
     overlayCacheRef.current = null;
-    lastHoverGuideIndexRef.current = null;
-    isApplyingHoverGuidesRef.current = false;
   }, [timeframe, symbol]);
 
   useEffect(() => {
@@ -860,9 +690,6 @@ export default function TradingChart({
       !candleSeriesRef.current ||
       !forecastCandleSeriesRef.current ||
       !predictionLineSeriesRef.current ||
-      !hoverHighGuideSeriesRef.current ||
-      !hoverMidGuideSeriesRef.current ||
-      !hoverLowGuideSeriesRef.current ||
       !rsiSeriesRef.current ||
       !macdHistogramRef.current ||
       !macdSignalRef.current ||
@@ -877,18 +704,13 @@ export default function TradingChart({
       candleSeriesRef.current.setData([]);
       forecastCandleSeriesRef.current.setData([]);
       predictionLineSeriesRef.current.setData([]);
-      hoverHighGuideSeriesRef.current.setData([]);
-      hoverMidGuideSeriesRef.current.setData([]);
-      hoverLowGuideSeriesRef.current.setData([]);
       rsiSeriesRef.current.setData([]);
       macdHistogramRef.current.setData([]);
       macdSignalRef.current.setData([]);
-      forecastHoverPointsRef.current = [];
       overlayCacheKeyRef.current = "";
       overlayCacheRef.current = null;
       lastIndicatorRefreshAtRef.current = 0;
       lastIndicatorCandleTimeRef.current = Number.NaN;
-      lastHoverGuideIndexRef.current = null;
       hasInitialFitRef.current = false;
       shouldAutoFollowRef.current = true;
       lastRenderedLengthRef.current = 0;
@@ -928,11 +750,6 @@ export default function TradingChart({
       if (cachedOverlay) {
         predictionLineSeriesRef.current.setData(cachedOverlay.forecastSeries);
         forecastCandleSeriesRef.current.setData(cachedOverlay.forecastCandles);
-        hoverHighGuideSeriesRef.current.setData([]);
-        hoverMidGuideSeriesRef.current.setData([]);
-        hoverLowGuideSeriesRef.current.setData([]);
-        forecastHoverPointsRef.current = cachedOverlay.hoverPoints;
-        forecastStepSecondsRef.current = cachedOverlay.stepSeconds;
       } else {
         const lastCandle = normalizedInputCandles[normalizedInputCandles.length - 1];
         const fallbackAnchorTime = toUnix(lastCandle.timestamp);
@@ -969,13 +786,16 @@ export default function TradingChart({
               recentWindow.length
             : 0;
         const anchorMagnitude = Math.max(Math.abs(anchorClose), 1);
-        const wickRangeCap = Math.max(
-          averageRecentRange * 3,
+        const baseWickRangeCap = Math.max(
+          averageRecentRange * 1.55,
           anchorMagnitude * forecastRangeCapRatio(timeframe),
+        );
+        const maxGlobalDrift = Math.max(
+          averageRecentRange * 6,
+          anchorMagnitude * Math.max(0.015, forecastRangeCapRatio(timeframe) * 4.0),
         );
 
         const forecastCandles: CandlestickData<UTCTimestamp>[] = [];
-        const hoverPoints: ForecastHoverPoint[] = [];
         for (let index = 0; index < prediction.prediction_array.length; index += 1) {
           const time = (anchorTime + (index + 1) * stepSeconds) as UTCTimestamp;
           const open = index === 0 ? anchorClose : prediction.prediction_array[index - 1];
@@ -1016,25 +836,26 @@ export default function TradingChart({
           const bodyLow = Math.min(open, close);
           const rawHigh = Math.max(bodyHigh, rangeHigh);
           const rawLow = Math.min(bodyLow, rangeLow);
-          const cappedHigh = Math.min(rawHigh, bodyHigh + wickRangeCap);
-          const cappedLow = Math.max(rawLow, bodyLow - wickRangeCap);
+          const normalizedIndex =
+            prediction.prediction_array.length > 1
+              ? index / (prediction.prediction_array.length - 1)
+              : 0;
+          const driftCap = maxGlobalDrift * (1 + normalizedIndex * 0.55);
+          const perCandleWickCap = Math.max(baseWickRangeCap, Math.abs(close - open) * 1.4);
+          const upperHardCap = Math.max(open, close, anchorClose + driftCap);
+          const lowerHardCap = Math.min(open, close, anchorClose - driftCap);
+
+          const cappedHigh = Math.min(rawHigh, bodyHigh + perCandleWickCap, upperHardCap);
+          const cappedLow = Math.max(rawLow, bodyLow - perCandleWickCap, lowerHardCap);
           const high = Math.max(bodyHigh, cappedHigh);
           const low = Math.min(bodyLow, cappedLow);
 
           forecastCandles.push({ time, open, high, low, close });
-          hoverPoints.push({
-            time,
-            low,
-            mid: close,
-            high,
-          });
         }
 
         const overlayCache: ForecastOverlayCache = {
           forecastSeries,
           forecastCandles,
-          hoverPoints,
-          stepSeconds: Math.max(1, stepSeconds),
         };
 
         overlayCacheRef.current = overlayCache;
@@ -1042,22 +863,12 @@ export default function TradingChart({
 
         predictionLineSeriesRef.current.setData(overlayCache.forecastSeries);
         forecastCandleSeriesRef.current.setData(overlayCache.forecastCandles);
-        hoverHighGuideSeriesRef.current.setData([]);
-        hoverMidGuideSeriesRef.current.setData([]);
-        hoverLowGuideSeriesRef.current.setData([]);
-        forecastHoverPointsRef.current = overlayCache.hoverPoints;
-        forecastStepSecondsRef.current = overlayCache.stepSeconds;
       }
     } else {
       forecastCandleSeriesRef.current.setData([]);
       predictionLineSeriesRef.current.setData([]);
-      hoverHighGuideSeriesRef.current.setData([]);
-      hoverMidGuideSeriesRef.current.setData([]);
-      hoverLowGuideSeriesRef.current.setData([]);
-      forecastHoverPointsRef.current = [];
       overlayCacheRef.current = null;
       overlayCacheKeyRef.current = "";
-      lastHoverGuideIndexRef.current = null;
     }
 
     const latestCandleTimeMs = parseTimestampMs(
@@ -1206,12 +1017,6 @@ export default function TradingChart({
         <span className="flex items-center gap-2">
           <span className="inline-block h-3 w-3 rounded-sm border border-violet-300/80 bg-violet-500/20" />
           <span>Forecast range (high/low)</span>
-        </span>
-        <span className="flex items-center gap-2">
-          <span className="inline-block h-2 w-2 rounded-full bg-cyan-300" />
-          <span className="inline-block h-2 w-2 rounded-full bg-violet-400" />
-          <span className="inline-block h-2 w-2 rounded-full bg-amber-300" />
-          <span>Hover forecast to show low/avg/high guides</span>
         </span>
       </div>
       {isLoadingOlder && (
