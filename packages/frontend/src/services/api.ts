@@ -87,10 +87,20 @@ interface Binance24hTickerPayload {
   priceChangePercent: string;
 }
 
+interface BinanceMarkPricePayload {
+  symbol: string;
+  markPrice: string;
+}
+
 export interface Binance24hTicker {
   symbol: string;
   lastPrice: number;
   changePercent: number;
+}
+
+export interface BinanceMarkPrice {
+  symbol: string;
+  markPrice: number;
 }
 
 export interface RealtimeKlineMessage {
@@ -297,9 +307,43 @@ export async function fetchBinance24hTicker(symbol: string): Promise<Binance24hT
   };
 }
 
+export async function fetchBinanceMarkPrice(symbol: string): Promise<BinanceMarkPrice> {
+  const response = await axios.get<BinanceMarkPricePayload>("https://fapi.binance.com/fapi/v1/premiumIndex", {
+    params: { symbol: symbol.toUpperCase() },
+    timeout: 8000,
+  });
+
+  const markPrice = Number(response.data.markPrice);
+  if (!Number.isFinite(markPrice)) {
+    throw new Error("Invalid Binance mark price payload");
+  }
+
+  return {
+    symbol: response.data.symbol,
+    markPrice,
+  };
+}
+
 export async function fetchPrediction(input: PredictRequest): Promise<PredictResponse> {
-  const response = await api.post<PredictResponse>("/predict", input);
-  return response.data;
+  const postPrediction = async (timeoutMs: number): Promise<PredictResponse> => {
+    const response = await api.post<PredictResponse>("/predict", input, {
+      timeout: timeoutMs,
+    });
+    return response.data;
+  };
+
+  try {
+    return await postPrediction(45_000);
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+      const shouldRetry = error.code === "ECONNABORTED" || status === 502 || status === 503 || status === 504;
+      if (shouldRetry) {
+        return postPrediction(60_000);
+      }
+    }
+    throw error;
+  }
 }
 
 export async function fetchHealth(): Promise<{ status: string }> {

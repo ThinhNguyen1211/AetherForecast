@@ -9,6 +9,7 @@ interface PredictionPanelProps {
   symbol: string;
   timeframe: Timeframe;
   lastPrice: number | null;
+  currentPriceLabel?: string;
   lastCandleTimestamp: string | null;
   prediction: PredictResponse | null;
   horizonOptions: HorizonOption[];
@@ -51,6 +52,7 @@ export default function PredictionPanel({
   symbol,
   timeframe,
   lastPrice,
+  currentPriceLabel = "Current",
   lastCandleTimestamp,
   prediction,
   horizonOptions,
@@ -148,7 +150,7 @@ export default function PredictionPanel({
 
       <div className="mt-4 grid grid-cols-2 gap-3">
         <div className="rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-3">
-          <p className="muted-label">Current</p>
+          <p className="muted-label">{currentPriceLabel}</p>
           <p className="mt-1 font-mono text-lg text-violet-50">
             {lastPrice !== null ? lastPrice.toFixed(6) : "--"}
           </p>

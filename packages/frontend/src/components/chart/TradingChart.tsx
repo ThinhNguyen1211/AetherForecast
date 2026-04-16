@@ -8,6 +8,7 @@ import {
   LineData,
   LineStyle,
   LogicalRange,
+  MouseEventParams,
   TickMarkType,
   Time,
   UTCTimestamp,
@@ -35,6 +36,13 @@ interface TradingChartProps {
 interface IndicatorLine {
   time: UTCTimestamp;
   value: number;
+}
+
+interface ForecastHoverPoint {
+  time: UTCTimestamp;
+  low: number;
+  mid: number;
+  high: number;
 }
 
 function parseTimestampMs(timestamp: string): number {
@@ -69,6 +77,10 @@ function chartTimeToDate(time: Time): Date {
 
   const businessDay = time as BusinessDay;
   return new Date(Date.UTC(businessDay.year, businessDay.month - 1, businessDay.day));
+}
+
+function chartTimeToUnix(time: Time): UTCTimestamp {
+  return Math.floor(chartTimeToDate(time).getTime() / 1000) as UTCTimestamp;
 }
 
 function formatAxisTimeLabel(time: Time, timeZone: string, tickMarkType: TickMarkType): string {
@@ -339,10 +351,10 @@ export default function TradingChart({
 
   const candleSeriesRef = useRef<ReturnType<IChartApi["addCandlestickSeries"]> | null>(null);
   const forecastCandleSeriesRef = useRef<ReturnType<IChartApi["addCandlestickSeries"]> | null>(null);
-  const currentBaselineSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
   const predictionLineSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const predictionHighDotSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
-  const predictionLowDotSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
+  const hoverHighGuideSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
+  const hoverMidGuideSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
+  const hoverLowGuideSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
 
   const rsiSeriesRef = useRef<ReturnType<IChartApi["addLineSeries"]> | null>(null);
   const macdHistogramRef = useRef<ReturnType<IChartApi["addHistogramSeries"]> | null>(null);
@@ -358,6 +370,8 @@ export default function TradingChart({
   const normalizedCandlesRef = useRef<Candle[]>([]);
   const loadOlderCallbackRef = useRef<((oldestTimestamp: string) => void) | null>(null);
   const loadingOlderRef = useRef(false);
+  const forecastHoverPointsRef = useRef<ForecastHoverPoint[]>([]);
+  const forecastStepSecondsRef = useRef<number>(timeframeSeconds(timeframe));
   const resolvedTimeZone =
     timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const timeZoneRef = useRef<string>(resolvedTimeZone);
@@ -471,34 +485,20 @@ export default function TradingChart({
     });
     forecastCandleSeriesRef.current = forecastCandleSeries;
 
-    const currentBaselineSeries = mainChart.addLineSeries({
-      color: "rgba(0, 255, 255, 0.85)",
-      lineWidth: 1,
-      lineStyle: LineStyle.Dashed,
-      priceLineVisible: true,
-      priceLineColor: "rgba(0, 255, 255, 0.72)",
-      priceLineStyle: LineStyle.Dashed,
-      lastValueVisible: true,
-      crosshairMarkerVisible: false,
-      title: "Current",
-    });
-    currentBaselineSeriesRef.current = currentBaselineSeries;
-
     const predictionLineSeries = mainChart.addLineSeries({
       color: "#8c52ff",
       lineWidth: 2,
       lineStyle: LineStyle.Solid,
       priceLineVisible: false,
       lastValueVisible: false,
-      crosshairMarkerRadius: 5,
-      crosshairMarkerBorderColor: "#8c52ff",
-      crosshairMarkerBackgroundColor: "#8c52ff",
+      crosshairMarkerVisible: false,
     });
     predictionLineSeriesRef.current = predictionLineSeries;
 
-    const predictionHighDotSeries = mainChart.addLineSeries({
-      color: "rgba(0,0,0,0)",
+    const hoverHighGuideSeries = mainChart.addLineSeries({
+      color: "rgba(248,193,58,0.45)",
       lineWidth: 1,
+      lineStyle: LineStyle.Dotted,
       priceLineVisible: false,
       lastValueVisible: false,
       crosshairMarkerVisible: true,
@@ -506,11 +506,25 @@ export default function TradingChart({
       crosshairMarkerBorderColor: "#f8c13a",
       crosshairMarkerBackgroundColor: "#f8c13a",
     });
-    predictionHighDotSeriesRef.current = predictionHighDotSeries;
+    hoverHighGuideSeriesRef.current = hoverHighGuideSeries;
 
-    const predictionLowDotSeries = mainChart.addLineSeries({
-      color: "rgba(0,0,0,0)",
+    const hoverMidGuideSeries = mainChart.addLineSeries({
+      color: "rgba(140,82,255,0.45)",
       lineWidth: 1,
+      lineStyle: LineStyle.Dotted,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: true,
+      crosshairMarkerRadius: 4,
+      crosshairMarkerBorderColor: "#8c52ff",
+      crosshairMarkerBackgroundColor: "#8c52ff",
+    });
+    hoverMidGuideSeriesRef.current = hoverMidGuideSeries;
+
+    const hoverLowGuideSeries = mainChart.addLineSeries({
+      color: "rgba(52,213,255,0.45)",
+      lineWidth: 1,
+      lineStyle: LineStyle.Dotted,
       priceLineVisible: false,
       lastValueVisible: false,
       crosshairMarkerVisible: true,
@@ -518,7 +532,7 @@ export default function TradingChart({
       crosshairMarkerBorderColor: "#34d5ff",
       crosshairMarkerBackgroundColor: "#34d5ff",
     });
-    predictionLowDotSeriesRef.current = predictionLowDotSeries;
+    hoverLowGuideSeriesRef.current = hoverLowGuideSeries;
 
     const rsiChart = createChart(rsiChartRef.current, {
       ...sharedOptions,
@@ -593,10 +607,10 @@ export default function TradingChart({
       macdChartApiRef.current = null;
       candleSeriesRef.current = null;
       forecastCandleSeriesRef.current = null;
-      currentBaselineSeriesRef.current = null;
       predictionLineSeriesRef.current = null;
-      predictionHighDotSeriesRef.current = null;
-      predictionLowDotSeriesRef.current = null;
+      hoverHighGuideSeriesRef.current = null;
+      hoverMidGuideSeriesRef.current = null;
+      hoverLowGuideSeriesRef.current = null;
       rsiSeriesRef.current = null;
       macdHistogramRef.current = null;
       macdSignalRef.current = null;
@@ -649,6 +663,80 @@ export default function TradingChart({
   }, []);
 
   useEffect(() => {
+    const mainChart = mainChartApiRef.current;
+    if (
+      !mainChart ||
+      !hoverHighGuideSeriesRef.current ||
+      !hoverMidGuideSeriesRef.current ||
+      !hoverLowGuideSeriesRef.current
+    ) {
+      return;
+    }
+
+    const clearHoverGuides = () => {
+      hoverHighGuideSeriesRef.current?.setData([]);
+      hoverMidGuideSeriesRef.current?.setData([]);
+      hoverLowGuideSeriesRef.current?.setData([]);
+    };
+
+    const handleCrosshairMove = (param: MouseEventParams<Time>) => {
+      if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0) {
+        clearHoverGuides();
+        return;
+      }
+
+      const forecastPoints = forecastHoverPointsRef.current;
+      if (forecastPoints.length === 0) {
+        clearHoverGuides();
+        return;
+      }
+
+      const hoverTime = Number(chartTimeToUnix(param.time));
+      const stepSeconds = Math.max(1, forecastStepSecondsRef.current);
+      const firstTime = Number(forecastPoints[0].time);
+      const lastTime = Number(forecastPoints[forecastPoints.length - 1].time);
+
+      if (hoverTime < firstTime - stepSeconds || hoverTime > lastTime + stepSeconds) {
+        clearHoverGuides();
+        return;
+      }
+
+      const rawIndex = Math.round((hoverTime - firstTime) / stepSeconds);
+      const clampedIndex = Math.max(0, Math.min(forecastPoints.length - 1, rawIndex));
+      const point = forecastPoints[clampedIndex];
+
+      if (Math.abs(hoverTime - Number(point.time)) > stepSeconds) {
+        clearHoverGuides();
+        return;
+      }
+
+      const halfSpan = Math.max(1, Math.floor(stepSeconds * 0.45));
+      const left = (Number(point.time) - halfSpan) as UTCTimestamp;
+      const right = (Number(point.time) + halfSpan) as UTCTimestamp;
+
+      hoverHighGuideSeriesRef.current?.setData([
+        { time: left, value: point.high },
+        { time: right, value: point.high },
+      ]);
+      hoverMidGuideSeriesRef.current?.setData([
+        { time: left, value: point.mid },
+        { time: right, value: point.mid },
+      ]);
+      hoverLowGuideSeriesRef.current?.setData([
+        { time: left, value: point.low },
+        { time: right, value: point.low },
+      ]);
+    };
+
+    mainChart.subscribeCrosshairMove(handleCrosshairMove);
+
+    return () => {
+      mainChart.unsubscribeCrosshairMove(handleCrosshairMove);
+      clearHoverGuides();
+    };
+  }, []);
+
+  useEffect(() => {
     lazyLoadAnchorRef.current = null;
     hasInitialFitRef.current = false;
     shouldAutoFollowRef.current = true;
@@ -670,10 +758,10 @@ export default function TradingChart({
     if (
       !candleSeriesRef.current ||
       !forecastCandleSeriesRef.current ||
-      !currentBaselineSeriesRef.current ||
       !predictionLineSeriesRef.current ||
-      !predictionHighDotSeriesRef.current ||
-      !predictionLowDotSeriesRef.current ||
+      !hoverHighGuideSeriesRef.current ||
+      !hoverMidGuideSeriesRef.current ||
+      !hoverLowGuideSeriesRef.current ||
       !rsiSeriesRef.current ||
       !macdHistogramRef.current ||
       !macdSignalRef.current ||
@@ -687,13 +775,14 @@ export default function TradingChart({
     if (normalizedInputCandles.length === 0) {
       candleSeriesRef.current.setData([]);
       forecastCandleSeriesRef.current.setData([]);
-      currentBaselineSeriesRef.current.setData([]);
       predictionLineSeriesRef.current.setData([]);
-      predictionHighDotSeriesRef.current.setData([]);
-      predictionLowDotSeriesRef.current.setData([]);
+      hoverHighGuideSeriesRef.current.setData([]);
+      hoverMidGuideSeriesRef.current.setData([]);
+      hoverLowGuideSeriesRef.current.setData([]);
       rsiSeriesRef.current.setData([]);
       macdHistogramRef.current.setData([]);
       macdSignalRef.current.setData([]);
+      forecastHoverPointsRef.current = [];
       hasInitialFitRef.current = false;
       shouldAutoFollowRef.current = true;
       lastRenderedLengthRef.current = 0;
@@ -717,11 +806,6 @@ export default function TradingChart({
     candleSeriesRef.current.setData(candleData);
 
     if (prediction && normalizedInputCandles.length > 0 && prediction.prediction_array.length > 0) {
-      candleSeriesRef.current.applyOptions({
-        priceLineVisible: false,
-        lastValueVisible: false,
-      });
-
       const lastCandle = normalizedInputCandles[normalizedInputCandles.length - 1];
       const fallbackAnchorTime = toUnix(lastCandle.timestamp);
       const parsedAnchorMs = predictionAnchor ? parseTimestampMs(predictionAnchor.baseTimestamp) : Number.NaN;
@@ -741,12 +825,6 @@ export default function TradingChart({
       }
 
       predictionLineSeriesRef.current.setData(forecastSeries);
-
-      const baselineEndTime = (anchorTime + prediction.prediction_array.length * stepSeconds) as UTCTimestamp;
-      currentBaselineSeriesRef.current.setData([
-        { time: anchorTime, value: anchorClose },
-        { time: baselineEndTime, value: anchorClose },
-      ]);
 
       const sortedBands = [...(prediction.confidence_bands ?? [])].sort(
         (left, right) => left.quantile - right.quantile,
@@ -771,8 +849,7 @@ export default function TradingChart({
       );
 
       const forecastCandles: CandlestickData<UTCTimestamp>[] = [];
-      const highDots: LineData<UTCTimestamp>[] = [];
-      const lowDots: LineData<UTCTimestamp>[] = [];
+      const hoverPoints: ForecastHoverPoint[] = [];
       for (let index = 0; index < prediction.prediction_array.length; index += 1) {
         const time = (anchorTime + (index + 1) * stepSeconds) as UTCTimestamp;
         const open = index === 0 ? anchorClose : prediction.prediction_array[index - 1];
@@ -819,25 +896,27 @@ export default function TradingChart({
         const low = Math.min(bodyLow, cappedLow);
 
         forecastCandles.push({ time, open, high, low, close });
-        if (index === prediction.prediction_array.length - 1) {
-          highDots.push({ time, value: high });
-          lowDots.push({ time, value: low });
-        }
+        hoverPoints.push({
+          time,
+          low,
+          mid: close,
+          high,
+        });
       }
 
       forecastCandleSeriesRef.current.setData(forecastCandles);
-      predictionHighDotSeriesRef.current.setData(highDots);
-      predictionLowDotSeriesRef.current.setData(lowDots);
+      hoverHighGuideSeriesRef.current.setData([]);
+      hoverMidGuideSeriesRef.current.setData([]);
+      hoverLowGuideSeriesRef.current.setData([]);
+      forecastHoverPointsRef.current = hoverPoints;
+      forecastStepSecondsRef.current = Math.max(1, stepSeconds);
     } else {
-      candleSeriesRef.current.applyOptions({
-        priceLineVisible: true,
-        lastValueVisible: true,
-      });
       forecastCandleSeriesRef.current.setData([]);
-      currentBaselineSeriesRef.current.setData([]);
       predictionLineSeriesRef.current.setData([]);
-      predictionHighDotSeriesRef.current.setData([]);
-      predictionLowDotSeriesRef.current.setData([]);
+      hoverHighGuideSeriesRef.current.setData([]);
+      hoverMidGuideSeriesRef.current.setData([]);
+      hoverLowGuideSeriesRef.current.setData([]);
+      forecastHoverPointsRef.current = [];
     }
 
     rsiSeriesRef.current.setData(calculateRsi(normalizedInputCandles, 14));
@@ -966,7 +1045,7 @@ export default function TradingChart({
       <div className="flex flex-wrap items-center gap-4 px-1 text-[11px] text-violet-200/75">
         <span className="flex items-center gap-2">
           <span className="inline-block h-[2px] w-5 bg-cyan-300" />
-          <span>Current baseline + price label</span>
+          <span>Live candle price (realtime)</span>
         </span>
         <span className="flex items-center gap-2">
           <span className="inline-block h-[2px] w-5 bg-violet-400" />
@@ -977,9 +1056,10 @@ export default function TradingChart({
           <span>Forecast range (high/low)</span>
         </span>
         <span className="flex items-center gap-2">
-          <span className="inline-block h-2 w-2 rounded-full bg-amber-300" />
           <span className="inline-block h-2 w-2 rounded-full bg-cyan-300" />
-          <span>High/Low endpoint dots</span>
+          <span className="inline-block h-2 w-2 rounded-full bg-violet-400" />
+          <span className="inline-block h-2 w-2 rounded-full bg-amber-300" />
+          <span>Hover forecast to show low/avg/high guides</span>
         </span>
       </div>
       {isLoadingOlder && (

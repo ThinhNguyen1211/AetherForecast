@@ -11,6 +11,7 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useMarketStore } from "@/hooks/useMarketStore";
 import {
   fetchBinance24hTicker,
+  fetchBinanceMarkPrice,
   Candle,
   RealtimeKlineMessage,
   connectRealtimeKline,
@@ -295,6 +296,7 @@ export default function Dashboard() {
     lastPrice: number;
     changePercent: number;
   } | null>(null);
+  const [binanceMarkPrice, setBinanceMarkPrice] = useState<number | null>(null);
   const [regionalClock, setRegionalClock] = useState<RegionalClockContext>({
     timeZone: browserTimeZone,
     locationLabel: `${browserTimeZone} (browser)` ,
@@ -629,24 +631,34 @@ export default function Dashboard() {
   useEffect(() => {
     if (!token || !symbol) {
       setBinanceTicker(null);
+      setBinanceMarkPrice(null);
       return;
     }
 
     let cancelled = false;
     const refreshBinanceTicker = async () => {
-      try {
-        const nextTicker = await fetchBinance24hTicker(symbol);
-        if (cancelled) {
-          return;
-        }
+      const [tickerResult, markPriceResult] = await Promise.allSettled([
+        fetchBinance24hTicker(symbol),
+        fetchBinanceMarkPrice(symbol),
+      ]);
+
+      if (cancelled) {
+        return;
+      }
+
+      if (tickerResult.status === "fulfilled") {
         setBinanceTicker({
-          lastPrice: nextTicker.lastPrice,
-          changePercent: nextTicker.changePercent,
+          lastPrice: tickerResult.value.lastPrice,
+          changePercent: tickerResult.value.changePercent,
         });
-      } catch {
-        if (!cancelled) {
-          setBinanceTicker(null);
-        }
+      } else {
+        setBinanceTicker(null);
+      }
+
+      if (markPriceResult.status === "fulfilled") {
+        setBinanceMarkPrice(markPriceResult.value.markPrice);
+      } else {
+        setBinanceMarkPrice(null);
       }
     };
 
@@ -852,7 +864,8 @@ export default function Dashboard() {
           <PredictionPanel
             symbol={symbol}
             timeframe={timeframe}
-            lastPrice={ticker.price}
+            lastPrice={binanceMarkPrice ?? ticker.price}
+            currentPriceLabel={binanceMarkPrice !== null ? "Current (Mark Price)" : "Current (Last Price)"}
             lastCandleTimestamp={chartCandles[chartCandles.length - 1]?.timestamp ?? null}
             prediction={prediction}
             horizonOptions={FORECAST_HORIZON_OPTIONS}
