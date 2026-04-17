@@ -520,6 +520,7 @@ export default function TradingChart({
       borderDownColor: "rgba(140,82,255,0.9)",
       priceLineVisible: false,
       lastValueVisible: false,
+      autoscaleInfoProvider: () => null,
       priceFormat: {
         type: "price",
         precision: 6,
@@ -787,12 +788,12 @@ export default function TradingChart({
             : 0;
         const anchorMagnitude = Math.max(Math.abs(anchorClose), 1);
         const baseWickRangeCap = Math.max(
-          averageRecentRange * 1.55,
-          anchorMagnitude * forecastRangeCapRatio(timeframe),
+          averageRecentRange * 1.25,
+          anchorMagnitude * forecastRangeCapRatio(timeframe) * 0.85,
         );
         const maxGlobalDrift = Math.max(
-          averageRecentRange * 6,
-          anchorMagnitude * Math.max(0.015, forecastRangeCapRatio(timeframe) * 4.0),
+          averageRecentRange * 3.5,
+          anchorMagnitude * forecastRangeCapRatio(timeframe) * 1.65,
         );
 
         const forecastCandles: CandlestickData<UTCTimestamp>[] = [];

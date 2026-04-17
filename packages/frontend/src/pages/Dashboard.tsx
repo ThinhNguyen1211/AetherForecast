@@ -306,6 +306,9 @@ export default function Dashboard() {
   const hasMoreHistoryRef = useRef(true);
   const lastLazyLoadAnchorRef = useRef<string | null>(null);
   const previousHorizonHoursRef = useRef<number>(selectedHorizonHours);
+  const chartCandlesRef = useRef<Candle[]>(chartCandles);
+  const wsWasOfflineRef = useRef(false);
+  const backfillInFlightRef = useRef(false);
 
   const debouncedQuery = useDebouncedValue(searchQuery, 180);
 
@@ -341,6 +344,10 @@ export default function Dashboard() {
       changeLabel: usingBinanceTicker ? "binance24h" : fallbackLabel,
     };
   }, [chartCandles, binanceTicker]);
+
+  useEffect(() => {
+    chartCandlesRef.current = chartCandles;
+  }, [chartCandles]);
 
   const loadSymbols = useCallback(async () => {
     if (!token) {
@@ -393,6 +400,25 @@ export default function Dashboard() {
       setLoadingChart(false);
     }
   }, [token, symbol, timeframe, setLoadingChart, setErrorMessage, setChartCandles, setApiStatus]);
+
+  const backfillLatestCandles = useCallback(async () => {
+    if (!token || !symbol) {
+      return;
+    }
+
+    try {
+      const latestSnapshotLimit = Math.max(360, Math.min(1800, timeframeChartLimit(timeframe)));
+      const candles = await fetchChart(symbol, timeframe, latestSnapshotLimit);
+      if (candles.length === 0) {
+        return;
+      }
+
+      setChartCandles((previous) => mergeCandles(previous, candles));
+      setApiStatus("online");
+    } catch {
+      setApiStatus("offline");
+    }
+  }, [token, symbol, timeframe, setChartCandles, setApiStatus]);
 
   const loadOlderCandles = useCallback(
     async (oldestTimestamp: string) => {
@@ -624,6 +650,8 @@ export default function Dashboard() {
   useEffect(() => {
     hasMoreHistoryRef.current = true;
     lastLazyLoadAnchorRef.current = null;
+    wsWasOfflineRef.current = false;
+    backfillInFlightRef.current = false;
     setLoadingOlderCandles(false);
     setChartCandles([]);
   }, [symbol, timeframe, setChartCandles]);
@@ -702,6 +730,27 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!token) {
+      wsWasOfflineRef.current = false;
+      backfillInFlightRef.current = false;
+      return;
+    }
+
+    if (wsStatus === "offline") {
+      wsWasOfflineRef.current = true;
+      return;
+    }
+
+    if (wsStatus === "online" && wsWasOfflineRef.current && !backfillInFlightRef.current) {
+      wsWasOfflineRef.current = false;
+      backfillInFlightRef.current = true;
+      void backfillLatestCandles().finally(() => {
+        backfillInFlightRef.current = false;
+      });
+    }
+  }, [token, wsStatus, backfillLatestCandles]);
+
+  useEffect(() => {
+    if (!token) {
       setWsStatus("idle");
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
@@ -722,6 +771,9 @@ export default function Dashboard() {
         return;
       }
 
+      const expectedCandleIntervalMs = timeframeSeconds(timeframe) * 1000;
+      const realtimeGapThresholdMs = expectedCandleIntervalMs * 1.6;
+
       const socket = connectRealtimeKline(
         symbol,
         timeframe,
@@ -731,6 +783,24 @@ export default function Dashboard() {
           }
 
           retryCount = 0;
+          const existingCandles = chartCandlesRef.current;
+          const previousLastMs =
+            existingCandles.length > 0
+              ? toEpochMs(existingCandles[existingCandles.length - 1].timestamp)
+              : Number.NaN;
+          const incomingMs = toEpochMs(message.timestamp);
+          const hasRealtimeGap =
+            Number.isFinite(previousLastMs) &&
+            Number.isFinite(incomingMs) &&
+            incomingMs > previousLastMs + realtimeGapThresholdMs;
+
+          if (hasRealtimeGap && !backfillInFlightRef.current) {
+            backfillInFlightRef.current = true;
+            void backfillLatestCandles().finally(() => {
+              backfillInFlightRef.current = false;
+            });
+          }
+
           setChartCandles((previous) => upsertRealtimeCandle(previous, message));
         },
         (status) => {
@@ -770,7 +840,7 @@ export default function Dashboard() {
         socketRef.current = null;
       }
     };
-  }, [token, symbol, timeframe, setChartCandles, setWsStatus]);
+  }, [token, symbol, timeframe, backfillLatestCandles, setChartCandles, setWsStatus]);
 
   const handleAuthenticated = (value: string) => {
     setToken(value);
