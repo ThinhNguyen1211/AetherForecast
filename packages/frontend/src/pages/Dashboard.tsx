@@ -54,6 +54,7 @@ const MAX_CANDLE_BUFFER = 12000;
 const BINANCE_TICKER_REFRESH_MS = 45_000;
 const CHART_FETCH_TIMEOUT_MS = 18_000;
 const CHART_SWITCH_RECOVERY_DELAY_MS = 1200;
+const PREDICTION_PAYLOAD_LIMIT = 420;
 const PREDICTION_STAGE_MIN_VISIBLE_MS = 180;
 const PREDICTION_RENDER_SETTLE_MS = 120;
 
@@ -318,6 +319,66 @@ function isTransientChartError(error: unknown): boolean {
 
 function isCanceledChartRequest(error: unknown): boolean {
   return axios.isAxiosError(error) && error.code === "ERR_CANCELED";
+}
+
+function isTransientPredictionError(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) {
+    return false;
+  }
+
+  if (error.code === "ERR_CANCELED") {
+    return false;
+  }
+
+  const status = error.response?.status;
+  return (
+    error.code === "ECONNABORTED" ||
+    error.code === "ERR_NETWORK" ||
+    error.code === "ERR_CONNECTION_RESET" ||
+    status === 408 ||
+    status === 425 ||
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    typeof status !== "number"
+  );
+}
+
+function resolvePredictionErrorMessage(error: unknown): string {
+  if (!axios.isAxiosError(error)) {
+    if (error instanceof Error && error.message) {
+      return error.message;
+    }
+    return "Prediction request failed. Please retry.";
+  }
+
+  const status = error.response?.status;
+  const detailPayload = error.response?.data as { detail?: unknown } | undefined;
+  const detail = typeof detailPayload?.detail === "string" ? detailPayload.detail : "";
+
+  if (status === 401 || status === 403) {
+    return "Authentication token is invalid or expired. Please sign in again.";
+  }
+  if (status === 422 && detail) {
+    return detail;
+  }
+  if (status === 429) {
+    return "Prediction service is busy. Please retry in a few seconds.";
+  }
+  if (status === 503 && detail) {
+    return `Prediction service unavailable: ${detail}`;
+  }
+  if (detail) {
+    return detail;
+  }
+
+  if (isTransientPredictionError(error)) {
+    return "Temporary network interruption while predicting. Retrying usually succeeds.";
+  }
+
+  return "Prediction request failed. Please verify backend /predict availability.";
 }
 
 export default function Dashboard() {
@@ -858,42 +919,50 @@ export default function Dashboard() {
       return;
     }
 
-    if (chartCandles.length < 20) {
-      setErrorMessage("Prediction requires at least 20 candles in chart data.");
-      return;
-    }
-
     setLoadingPrediction(true);
     setErrorMessage("");
     predictionStageChangedAtRef.current = 0;
 
     try {
       await advancePredictionStage("sync_market_data");
-      const freshSnapshotLimit = Math.max(240, Math.min(1200, timeframeChartLimit(timeframe)));
-      const freshestChartCandles = await fetchChartWithBackfill(
-        symbol,
-        timeframe,
-        freshSnapshotLimit,
-        Math.max(900, minimumChartCandles(timeframe)),
-      );
+      let predictionSource = chartCandlesRef.current;
 
-      await advancePredictionStage("fetch_external_context");
-      const predictionSource = freshestChartCandles.length > 0 ? freshestChartCandles : chartCandles;
+      if (predictionSource.length < 120) {
+        try {
+          const latestChartCandles = await fetchChart(
+            symbol,
+            timeframe,
+            Math.max(180, Math.min(900, timeframeChartLimit(timeframe))),
+            undefined,
+            CHART_FETCH_TIMEOUT_MS,
+            { retries: 2 },
+          );
 
-      if (predictionSource.length < 20) {
-        throw new Error("Prediction requires at least 20 candles in chart data.");
+          if (latestChartCandles.length > 0) {
+            const mergedSnapshot = mergeCandles(predictionSource, latestChartCandles);
+            predictionSource = mergedSnapshot;
+            setChartCandles(mergedSnapshot);
+            setChartCacheEntry(buildChartCacheKey(symbol, timeframe), {
+              candles: mergedSnapshot,
+              fetchedAt: Date.now(),
+            });
+          }
+        } catch (chartSyncError) {
+          if (predictionSource.length < 10) {
+            throw chartSyncError;
+          }
+          console.warn("[Dashboard] Prediction chart sync failed, proceeding with current real snapshot", chartSyncError);
+        }
       }
 
-      if (freshestChartCandles.length > 0) {
-        setChartCandles((previous) => mergeCandles(previous, freshestChartCandles));
-        setChartCacheEntry(buildChartCacheKey(symbol, timeframe), {
-          candles: mergeCandles(chartCandlesRef.current, freshestChartCandles),
-          fetchedAt: Date.now(),
-        });
+      await advancePredictionStage("fetch_external_context");
+
+      if (predictionSource.length < 10) {
+        throw new Error("Prediction requires at least 10 real candles. Please wait for chart sync to finish.");
       }
 
       await advancePredictionStage("prepare_payload");
-      const latestCandles = predictionSource.slice(-500);
+      const latestCandles = predictionSource.slice(-PREDICTION_PAYLOAD_LIMIT);
 
       await advancePredictionStage("send_request");
       const predictionPromise = fetchPrediction({
@@ -909,23 +978,21 @@ export default function Dashboard() {
       await advancePredictionStage("render_output");
 
       const anchorCandle = predictionSource[predictionSource.length - 1];
-      const anchor = {
-        baseTimestamp: anchorCandle.timestamp,
-        baseClose: anchorCandle.close,
-      };
+      const anchor = anchorCandle
+        ? {
+            baseTimestamp: anchorCandle.timestamp,
+            baseClose: anchorCandle.close,
+          }
+        : null;
 
       setPrediction(result);
       setPredictionAnchor(anchor);
       setApiStatus("online");
       await waitFor(PREDICTION_RENDER_SETTLE_MS);
     } catch (error) {
-      setApiStatus("offline");
-      setErrorMessage(
-        resolveApiErrorMessage(
-          error,
-          "Prediction request failed. Verify token and backend /predict endpoint.",
-        ),
-      );
+      const hasHttpResponse = axios.isAxiosError(error) && typeof error.response?.status === "number";
+      setApiStatus(hasHttpResponse || isTransientPredictionError(error) ? "online" : "offline");
+      setErrorMessage(resolvePredictionErrorMessage(error));
     } finally {
       setLoadingPrediction(false);
       setPredictionStage(null);
@@ -934,17 +1001,15 @@ export default function Dashboard() {
   }, [
     advancePredictionStage,
     token,
-    chartCandles,
     symbol,
     timeframe,
     selectedHorizonBars,
+    setChartCacheEntry,
     setChartCandles,
     setLoadingPrediction,
     setErrorMessage,
     setPrediction,
     setApiStatus,
-    fetchChartWithBackfill,
-    setChartCacheEntry,
   ]);
 
   useEffect(() => {
@@ -1477,8 +1542,6 @@ export default function Dashboard() {
             symbol={symbol}
             timeframe={timeframe}
             lastPrice={binanceMarkPrice ?? ticker.price}
-            currentPriceLabel={binanceMarkPrice !== null ? "Current (Mark Price)" : "Current (Last Price)"}
-            lastCandleTimestamp={chartCandles[chartCandles.length - 1]?.timestamp ?? null}
             prediction={prediction}
             horizonOptions={FORECAST_HORIZON_OPTIONS}
             selectedHorizonHours={selectedHorizonHours}

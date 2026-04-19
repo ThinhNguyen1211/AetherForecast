@@ -367,25 +367,51 @@ export async function fetchBinanceMarkPrice(symbol: string): Promise<BinanceMark
 }
 
 export async function fetchPrediction(input: PredictRequest): Promise<PredictResponse> {
-  const postPrediction = async (timeoutMs: number): Promise<PredictResponse> => {
-    const response = await api.post<PredictResponse>("/predict", input, {
-      timeout: timeoutMs,
-    });
-    return response.data;
-  };
+  const attemptTimeouts = [45_000, 60_000, 75_000];
+  let lastError: unknown = null;
 
-  try {
-    return await postPrediction(45_000);
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      const status = error.response?.status;
-      const shouldRetry = error.code === "ECONNABORTED" || status === 502 || status === 503 || status === 504;
-      if (shouldRetry) {
-        return postPrediction(60_000);
+  for (let attempt = 0; attempt < attemptTimeouts.length; attempt += 1) {
+    try {
+      const response = await api.post<PredictResponse>("/predict", input, {
+        timeout: attemptTimeouts[attempt],
+      });
+      return response.data;
+    } catch (error) {
+      lastError = error;
+      if (!axios.isAxiosError(error)) {
+        throw error;
       }
+
+      if (error.code === "ERR_CANCELED") {
+        throw error;
+      }
+
+      const status = error.response?.status;
+      const retriableStatus =
+        status === 408 ||
+        status === 425 ||
+        status === 429 ||
+        status === 500 ||
+        status === 502 ||
+        status === 503 ||
+        status === 504;
+      const retriableCode =
+        error.code === "ECONNABORTED" ||
+        error.code === "ERR_NETWORK" ||
+        error.code === "ERR_CONNECTION_RESET";
+
+      const shouldRetry = (retriableStatus || retriableCode || typeof status !== "number") && attempt < attemptTimeouts.length - 1;
+      if (!shouldRetry) {
+        throw error;
+      }
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 320 + attempt * 280);
+      });
     }
-    throw error;
   }
+
+  throw lastError ?? new Error("Prediction request failed");
 }
 
 export async function fetchHealth(): Promise<{ status: string }> {

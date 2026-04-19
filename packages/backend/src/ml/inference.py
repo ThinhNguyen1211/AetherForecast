@@ -766,14 +766,28 @@ class ForecastInferenceService:
         horizon = int(request.horizon)
         num_samples = max(10, min(64, int(self.settings.inference_num_samples)))
 
-        # Enforce live, backend-computed sentiment for every prediction.
-        sentiment_score, sentiment_source, external_sentiment_score, external_sentiment_source = (
-            self._estimate_sentiment_score(
-                request,
-                force_external_refresh=True,
-                require_external=True,
+        # Prefer live external sentiment, but never fail prediction when external feeds are temporarily unavailable.
+        try:
+            sentiment_score, sentiment_source, external_sentiment_score, external_sentiment_source = (
+                self._estimate_sentiment_score(
+                    request,
+                    force_external_refresh=True,
+                    require_external=True,
+                )
             )
-        )
+        except RuntimeError as sentiment_error:
+            logger.warning(
+                "External sentiment unavailable for %s; fallback to market-only sentiment: %s",
+                request.symbol.upper(),
+                sentiment_error,
+            )
+            sentiment_score, sentiment_source, external_sentiment_score, external_sentiment_source = (
+                self._estimate_sentiment_score(
+                    request,
+                    force_external_refresh=False,
+                    require_external=False,
+                )
+            )
 
         feature_bundle = self._build_context_series(
             request,

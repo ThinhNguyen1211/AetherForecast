@@ -1234,7 +1234,8 @@ export default function TradingChart({
   const showNoDataMessage = candles.length === 0 && !syncOverlayVisible && !isPredicting;
   const showInvalidDataMessage =
     candles.length > 0 && normalizedInputCandles.length === 0 && !syncOverlayVisible && !isPredicting;
-  const showStatusOverlay = isPredicting;
+  const showSyncOverlay = syncOverlayVisible && !isPredicting && normalizedInputCandles.length === 0;
+  const showStatusOverlay = isPredicting || showSyncOverlay;
   const predictionProgressRatio =
     predictionProgress.length > 0
       ? predictionProgress.reduce((sum, step) => {
@@ -1299,7 +1300,13 @@ export default function TradingChart({
                 </>
               )}
             </div>
-          ) : null}
+          ) : (
+            <div className="flex items-center gap-3 rounded-full border border-cyan-300/40 bg-cosmic-900/85 px-4 py-2 text-xs font-medium text-cyan-100">
+              <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-cyan-300" />
+              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-cyan-200/30 border-t-cyan-200" />
+              <span>Syncing chart data...</span>
+            </div>
+          )}
         </div>
       )}
       {(showNoDataMessage || showInvalidDataMessage) && (
