@@ -265,23 +265,6 @@ function formatSignedMetric(value: number, minimumFractionDigits = 2, maximumFra
   return `${sign}${formatMetricValue(value, minimumFractionDigits, maximumFractionDigits)}`;
 }
 
-type MarkerCapableSeries = {
-  setMarkers?: (markers: Array<Record<string, unknown>>) => void;
-};
-
-function safeSetMarkers(series: unknown, markers: Array<Record<string, unknown>>): void {
-  const candidate = series as MarkerCapableSeries | null;
-  if (!candidate || typeof candidate.setMarkers !== "function") {
-    return;
-  }
-
-  try {
-    candidate.setMarkers(markers);
-  } catch (error) {
-    console.warn("[TradingChart] Failed to update markers", error);
-  }
-}
-
 function findNearestActualCandle(candles: Candle[], targetUnix: number): { candle: Candle; diff: number } | null {
   if (candles.length === 0) {
     return null;
@@ -534,7 +517,6 @@ export default function TradingChart({
   const overlayCacheRef = useRef<ForecastOverlayCache | null>(null);
   const forecastHoverPointsRef = useRef<ForecastHoverPoint[]>([]);
   const forecastStepSecondsRef = useRef<number>(timeframeSeconds(timeframe));
-  const lastForecastMarkerKeyRef = useRef<string>("");
   const isInspectPinnedRef = useRef(false);
   const resolvedTimeZone =
     timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -542,19 +524,6 @@ export default function TradingChart({
   const normalizedInputCandles = useMemo(() => sanitizeCandles(candles), [candles]);
   const syncOverlayVisible = isSyncing;
   const [inspectSnapshot, setInspectSnapshot] = useState<InspectSnapshot | null>(null);
-
-  const clearForecastMarkers = () => {
-    if (!predictionLineSeriesRef.current) {
-      return;
-    }
-
-    if (!lastForecastMarkerKeyRef.current) {
-      return;
-    }
-
-    safeSetMarkers(predictionLineSeriesRef.current, []);
-    lastForecastMarkerKeyRef.current = "";
-  };
 
   const buildInspectSnapshot = (
     targetTime: Time,
@@ -869,49 +838,9 @@ export default function TradingChart({
 
   useEffect(() => {
     const mainChart = mainChartApiRef.current;
-    if (!mainChart || !predictionLineSeriesRef.current) {
+    if (!mainChart) {
       return;
     }
-
-    const handleCrosshairMove = (param: MouseEventParams<Time>) => {
-      try {
-        const points = forecastHoverPointsRef.current;
-        if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0 || points.length === 0) {
-          clearForecastMarkers();
-          return;
-        }
-
-        const hoverUnix = Math.floor(chartTimeToDate(param.time).getTime() / 1000);
-        if (!Number.isFinite(hoverUnix)) {
-          clearForecastMarkers();
-          return;
-        }
-
-        const nearest = findNearestForecastPoint(points, hoverUnix);
-        const stepSeconds = Math.max(1, forecastStepSecondsRef.current);
-        if (!nearest || nearest.diff > stepSeconds * 1.1) {
-          clearForecastMarkers();
-          return;
-        }
-
-        const markerKey = `${nearest.point.time}|${nearest.point.high}|${nearest.point.low}|${nearest.point.close}`;
-        if (lastForecastMarkerKeyRef.current === markerKey) {
-          return;
-        }
-
-        safeSetMarkers(predictionLineSeriesRef.current, [
-          {
-            time: nearest.point.time,
-            position: "aboveBar",
-            color: "#8c52ff",
-            shape: "circle",
-          },
-        ]);
-        lastForecastMarkerKeyRef.current = markerKey;
-      } catch (error) {
-        console.warn("[TradingChart] Crosshair handler failed", error);
-      }
-    };
 
     const handleClick = (param: MouseEventParams<Time>) => {
       try {
@@ -944,15 +873,12 @@ export default function TradingChart({
       setInspectSnapshot(null);
     };
 
-    mainChart.subscribeCrosshairMove(handleCrosshairMove);
     mainChart.subscribeClick(handleClick);
     window.addEventListener("keydown", handleEscapeKey);
 
     return () => {
-      mainChart.unsubscribeCrosshairMove(handleCrosshairMove);
       mainChart.unsubscribeClick(handleClick);
       window.removeEventListener("keydown", handleEscapeKey);
-      clearForecastMarkers();
     };
   }, [timeframe]);
 
@@ -971,7 +897,6 @@ export default function TradingChart({
     forecastStepSecondsRef.current = timeframeSeconds(timeframe);
     isInspectPinnedRef.current = false;
     setInspectSnapshot(null);
-    clearForecastMarkers();
   }, [timeframe, symbol]);
 
   useEffect(() => {
@@ -1008,7 +933,6 @@ export default function TradingChart({
       overlayCacheKeyRef.current = "";
       overlayCacheRef.current = null;
       forecastHoverPointsRef.current = [];
-      clearForecastMarkers();
       lastIndicatorRefreshAtRef.current = 0;
       lastIndicatorCandleTimeRef.current = Number.NaN;
       hasInitialFitRef.current = false;
@@ -1194,7 +1118,6 @@ export default function TradingChart({
       overlayCacheRef.current = null;
       overlayCacheKeyRef.current = "";
       forecastHoverPointsRef.current = [];
-      clearForecastMarkers();
     }
 
     const latestCandleTimeMs = parseTimestampMs(
@@ -1311,8 +1234,7 @@ export default function TradingChart({
   const showNoDataMessage = candles.length === 0 && !syncOverlayVisible && !isPredicting;
   const showInvalidDataMessage =
     candles.length > 0 && normalizedInputCandles.length === 0 && !syncOverlayVisible && !isPredicting;
-  const showChartSkeleton = syncOverlayVisible && !isPredicting && normalizedInputCandles.length === 0;
-  const showStatusOverlay = isPredicting || (syncOverlayVisible && !showChartSkeleton);
+  const showStatusOverlay = isPredicting;
   const predictionProgressRatio =
     predictionProgress.length > 0
       ? predictionProgress.reduce((sum, step) => {
@@ -1331,24 +1253,6 @@ export default function TradingChart({
 
   return (
     <div ref={wrapperRef} className="relative space-y-2">
-      {showChartSkeleton && (
-        <div className="pointer-events-none absolute inset-0 z-20 rounded-xl border border-cyan-300/20 bg-cosmic-900/55 p-4">
-          <div className="mb-3 h-4 w-48 animate-pulse rounded bg-cyan-200/20" />
-          <div className="flex h-[420px] items-end gap-1.5">
-            {Array.from({ length: 36 }).map((_, index) => {
-              const minHeight = 18;
-              const variance = ((index * 31) % 78) + minHeight;
-              return (
-                <span
-                  key={`chart-skeleton-${index}`}
-                  className="h-full w-full max-w-[16px] animate-pulse rounded-sm bg-gradient-to-t from-violet-500/25 via-cyan-300/20 to-transparent"
-                  style={{ height: `${variance}%` }}
-                />
-              );
-            })}
-          </div>
-        </div>
-      )}
       {showStatusOverlay && (
         <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-xl border border-cyan-300/20 bg-cosmic-900/40 backdrop-blur-[1px]">
           {isPredicting ? (
@@ -1395,13 +1299,7 @@ export default function TradingChart({
                 </>
               )}
             </div>
-          ) : (
-            <div className="flex items-center gap-3 rounded-full border border-cyan-300/40 bg-cosmic-900/85 px-4 py-2 text-xs font-medium text-cyan-100">
-              <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-cyan-300" />
-              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-cyan-200/30 border-t-cyan-200" />
-              <span>Syncing chart data...</span>
-            </div>
-          )}
+          ) : null}
         </div>
       )}
       {(showNoDataMessage || showInvalidDataMessage) && (

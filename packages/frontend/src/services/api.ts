@@ -81,6 +81,11 @@ export interface ChartResponse {
   candles: Candle[];
 }
 
+interface ChartRequestOptions {
+  signal?: AbortSignal;
+  retries?: number;
+}
+
 interface Binance24hTickerPayload {
   symbol: string;
   lastPrice: string;
@@ -278,16 +283,51 @@ export async function fetchChart(
   limit = 800,
   fromTimestamp?: string,
   timeoutMs = 12_000,
+  options: ChartRequestOptions = {},
 ): Promise<Candle[]> {
-  const response = await api.get<ChartResponse>(`/chart/${symbol}`, {
-    timeout: timeoutMs,
-    params: {
-      timeframe,
-      limit,
-      ...(fromTimestamp ? { from_timestamp: fromTimestamp } : {}),
-    },
-  });
-  return response.data.candles ?? [];
+  const maxRetries = Math.max(0, Math.min(3, options.retries ?? 2));
+  const maxAttempts = maxRetries + 1;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const response = await api.get<ChartResponse>(`/chart/${symbol}`, {
+        timeout: timeoutMs + attempt * 3_000,
+        signal: options.signal,
+        params: {
+          timeframe,
+          limit,
+          ...(fromTimestamp ? { from_timestamp: fromTimestamp } : {}),
+        },
+      });
+      return response.data.candles ?? [];
+    } catch (error) {
+      if (!axios.isAxiosError(error)) {
+        throw error;
+      }
+
+      if (error.code === "ERR_CANCELED") {
+        throw error;
+      }
+
+      const status = error.response?.status;
+      const retriableStatus = status === 408 || status === 425 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+      const retriableCode =
+        error.code === "ECONNABORTED" ||
+        error.code === "ERR_NETWORK" ||
+        error.code === "ERR_CONNECTION_RESET";
+      const retriable = retriableStatus || retriableCode || typeof status !== "number";
+
+      if (!retriable || attempt >= maxAttempts - 1) {
+        throw error;
+      }
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 250 + attempt * 250);
+      });
+    }
+  }
+
+  return [];
 }
 
 export async function fetchBinance24hTicker(symbol: string): Promise<Binance24hTicker> {

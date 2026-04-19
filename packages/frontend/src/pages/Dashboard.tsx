@@ -52,6 +52,8 @@ const CHART_SWITCH_DEBOUNCE_MS = 180;
 const HOT_PRELOAD_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XAUTUSDT"] as const;
 const MAX_CANDLE_BUFFER = 12000;
 const BINANCE_TICKER_REFRESH_MS = 45_000;
+const CHART_FETCH_TIMEOUT_MS = 18_000;
+const CHART_SWITCH_RECOVERY_DELAY_MS = 1200;
 const PREDICTION_STAGE_MIN_VISIBLE_MS = 180;
 const PREDICTION_RENDER_SETTLE_MS = 120;
 
@@ -271,6 +273,10 @@ function upsertRealtimeCandle(
 
 function resolveApiErrorMessage(error: unknown, fallback: string): string {
   if (axios.isAxiosError(error)) {
+    if (error.code === "ERR_NETWORK" || error.code === "ERR_CONNECTION_RESET") {
+      return "Network connection was interrupted while loading chart data. Retrying...";
+    }
+
     const status = error.response?.status;
     if (status === 401 || status === 403) {
       return "Authentication token is invalid or expired. Please sign in again.";
@@ -283,6 +289,35 @@ function resolveApiErrorMessage(error: unknown, fallback: string): string {
     }
   }
   return fallback;
+}
+
+function isTransientChartError(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) {
+    return false;
+  }
+
+  if (error.code === "ERR_CANCELED") {
+    return false;
+  }
+
+  const status = error.response?.status;
+  return (
+    error.code === "ECONNABORTED" ||
+    error.code === "ERR_NETWORK" ||
+    error.code === "ERR_CONNECTION_RESET" ||
+    status === 408 ||
+    status === 425 ||
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    typeof status !== "number"
+  );
+}
+
+function isCanceledChartRequest(error: unknown): boolean {
+  return axios.isAxiosError(error) && error.code === "ERR_CANCELED";
 }
 
 export default function Dashboard() {
@@ -347,8 +382,10 @@ export default function Dashboard() {
   const wsWasOfflineRef = useRef(false);
   const backfillInFlightRef = useRef(false);
   const chartSwitchTimerRef = useRef<number | null>(null);
+  const chartRecoveryTimerRef = useRef<number | null>(null);
   const chartLoadSequenceRef = useRef(0);
   const activeChartKeyRef = useRef<string>(buildChartCacheKey(symbol, timeframe));
+  const activeChartRequestControllerRef = useRef<AbortController | null>(null);
   const activeHydrationKeysRef = useRef<Set<string>>(new Set());
   const preloadInFlightRef = useRef(false);
   const predictionStageChangedAtRef = useRef<number>(0);
@@ -563,15 +600,22 @@ export default function Dashboard() {
     async (
       targetSymbol: string,
       targetTimeframe: Timeframe,
-      options: { forceRefresh?: boolean } = {},
+      options: { forceRefresh?: boolean; recoveryAttempt?: number } = {},
     ) => {
       if (!token || !targetSymbol) {
         return;
       }
 
       const forceRefresh = options.forceRefresh ?? false;
+      const recoveryAttempt = options.recoveryAttempt ?? 0;
       const cacheKey = buildChartCacheKey(targetSymbol, targetTimeframe);
       activeChartKeyRef.current = cacheKey;
+
+      if (activeChartRequestControllerRef.current) {
+        activeChartRequestControllerRef.current.abort();
+      }
+      const requestController = new AbortController();
+      activeChartRequestControllerRef.current = requestController;
 
       const now = Date.now();
       const cachedEntry = chartCacheRef.current[cacheKey];
@@ -601,7 +645,17 @@ export default function Dashboard() {
 
       const startedAt = performance.now();
       try {
-        const fastCandles = await fetchChart(targetSymbol, targetTimeframe, INITIAL_FAST_LOAD_LIMIT);
+        const fastCandles = await fetchChart(
+          targetSymbol,
+          targetTimeframe,
+          INITIAL_FAST_LOAD_LIMIT,
+          undefined,
+          CHART_FETCH_TIMEOUT_MS,
+          {
+            signal: requestController.signal,
+            retries: 2,
+          },
+        );
         if (sequence !== chartLoadSequenceRef.current || activeChartKeyRef.current !== cacheKey) {
           return;
         }
@@ -624,13 +678,35 @@ export default function Dashboard() {
           void hydrateChartHistory(targetSymbol, targetTimeframe, cacheKey, initialSnapshot);
         }
       } catch (error) {
+        if (isCanceledChartRequest(error)) {
+          return;
+        }
+
         if (sequence !== chartLoadSequenceRef.current || activeChartKeyRef.current !== cacheKey) {
           return;
         }
 
         setLoadingChart(false);
         if (!hasCachedChart) {
-          setApiStatus("offline");
+          const transientError = isTransientChartError(error);
+          if (transientError && recoveryAttempt < 1) {
+            setApiStatus("online");
+            setErrorMessage("Network unstable while switching timeframe. Retrying chart load...");
+
+            if (chartRecoveryTimerRef.current !== null) {
+              window.clearTimeout(chartRecoveryTimerRef.current);
+            }
+
+            chartRecoveryTimerRef.current = window.setTimeout(() => {
+              void loadChartProgressive(targetSymbol, targetTimeframe, {
+                forceRefresh: true,
+                recoveryAttempt: recoveryAttempt + 1,
+              });
+            }, CHART_SWITCH_RECOVERY_DELAY_MS);
+            return;
+          }
+
+          setApiStatus(transientError ? "online" : "offline");
           setErrorMessage(
             resolveApiErrorMessage(
               error,
@@ -643,6 +719,10 @@ export default function Dashboard() {
 
         setApiStatus("online");
         setErrorMessage("Loaded cached chart data. Live refresh will retry automatically.");
+      } finally {
+        if (activeChartRequestControllerRef.current === requestController) {
+          activeChartRequestControllerRef.current = null;
+        }
       }
     },
     [
@@ -680,8 +760,10 @@ export default function Dashboard() {
         fetchedAt: Date.now(),
       });
       setApiStatus("online");
-    } catch {
-      setApiStatus("offline");
+    } catch (error) {
+      if (!isTransientChartError(error)) {
+        setApiStatus("offline");
+      }
     }
   }, [token, symbol, timeframe, fetchChartWithBackfill, setChartCandles, setChartCacheEntry, setApiStatus]);
 
@@ -733,7 +815,7 @@ export default function Dashboard() {
         setApiStatus("online");
       } catch (error) {
         lastLazyLoadAnchorRef.current = null;
-        setApiStatus("offline");
+        setApiStatus(isTransientChartError(error) ? "online" : "offline");
         setErrorMessage(
           resolveApiErrorMessage(
             error,
@@ -965,6 +1047,16 @@ export default function Dashboard() {
     backfillInFlightRef.current = false;
     setLoadingOlderCandles(false);
 
+    if (activeChartRequestControllerRef.current) {
+      activeChartRequestControllerRef.current.abort();
+      activeChartRequestControllerRef.current = null;
+    }
+
+    if (chartRecoveryTimerRef.current !== null) {
+      window.clearTimeout(chartRecoveryTimerRef.current);
+      chartRecoveryTimerRef.current = null;
+    }
+
     const cacheKey = buildChartCacheKey(symbol, timeframe);
     const now = Date.now();
     const cachedEntry = chartCacheRef.current[cacheKey];
@@ -1001,6 +1093,11 @@ export default function Dashboard() {
         window.clearTimeout(chartSwitchTimerRef.current);
         chartSwitchTimerRef.current = null;
       }
+
+      if (chartRecoveryTimerRef.current !== null) {
+        window.clearTimeout(chartRecoveryTimerRef.current);
+        chartRecoveryTimerRef.current = null;
+      }
     };
   }, [
     token,
@@ -1014,7 +1111,7 @@ export default function Dashboard() {
   ]);
 
   useEffect(() => {
-    if (!token) {
+    if (!token || loadingChart) {
       return;
     }
     if (preloadInFlightRef.current) {
@@ -1022,6 +1119,7 @@ export default function Dashboard() {
     }
 
     let cancelled = false;
+    let preloadTimer: number | null = null;
     preloadInFlightRef.current = true;
 
     const preloadHotCharts = async () => {
@@ -1038,7 +1136,9 @@ export default function Dashboard() {
           }
 
           try {
-            const candles = await fetchChart(hotSymbol, timeframe, HOT_PRELOAD_LIMIT);
+            const candles = await fetchChart(hotSymbol, timeframe, HOT_PRELOAD_LIMIT, undefined, 10_000, {
+              retries: 1,
+            });
             if (cancelled || candles.length === 0) {
               continue;
             }
@@ -1056,13 +1156,31 @@ export default function Dashboard() {
       }
     };
 
-    void preloadHotCharts();
+    preloadTimer = window.setTimeout(() => {
+      void preloadHotCharts();
+    }, 1200);
 
     return () => {
       cancelled = true;
+      if (preloadTimer !== null) {
+        window.clearTimeout(preloadTimer);
+      }
       preloadInFlightRef.current = false;
     };
-  }, [token, timeframe, setChartCacheEntry]);
+  }, [token, timeframe, loadingChart, setChartCacheEntry]);
+
+  useEffect(() => {
+    return () => {
+      if (activeChartRequestControllerRef.current) {
+        activeChartRequestControllerRef.current.abort();
+        activeChartRequestControllerRef.current = null;
+      }
+      if (chartRecoveryTimerRef.current !== null) {
+        window.clearTimeout(chartRecoveryTimerRef.current);
+        chartRecoveryTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!token || !symbol) {
