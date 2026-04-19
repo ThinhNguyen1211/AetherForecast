@@ -530,12 +530,6 @@ class S3ParquetClient:
         limit: int = 1200,
         from_timestamp: Any | None = None,
     ) -> list[dict]:
-        if not self.settings.data_bucket:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="DATA_BUCKET is not configured",
-            )
-
         symbol = symbol.upper()
         normalized_timeframe = _normalize_timeframe(timeframe)
         requested_limit = max(1, min(int(limit), 5000))
@@ -557,13 +551,29 @@ class S3ParquetClient:
         window_start = window_end - timedelta(days=window_days)
         start_timestamp_ms = int(window_start.timestamp() * 1000)
 
-        parquet_records = self._fetch_from_parquet(
-            symbol=symbol,
-            timeframe=normalized_timeframe,
-            limit=requested_limit,
-            start_timestamp_ms=start_timestamp_ms,
-            before_timestamp_ms=before_timestamp_ms,
-        )
+        parquet_records: list[dict[str, float | str]] = []
+        if not self.settings.data_bucket:
+            logger.warning(
+                "DATA_BUCKET is not configured. Falling back to Binance-only chart fetch for %s %s.",
+                symbol,
+                normalized_timeframe,
+            )
+        else:
+            try:
+                parquet_records = self._fetch_from_parquet(
+                    symbol=symbol,
+                    timeframe=normalized_timeframe,
+                    limit=requested_limit,
+                    start_timestamp_ms=start_timestamp_ms,
+                    before_timestamp_ms=before_timestamp_ms,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Parquet chart fetch failed for %s %s, falling back to Binance-only: %s",
+                    symbol,
+                    normalized_timeframe,
+                    exc,
+                )
 
         parquet_records = self._merge_records(parquet_records, [], requested_limit)
 

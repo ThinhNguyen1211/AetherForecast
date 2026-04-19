@@ -53,8 +53,6 @@ interface ForecastHoverPoint {
 }
 
 interface InspectSnapshot {
-  x: number;
-  y: number;
   timeLabel: string;
   open: number;
   high: number;
@@ -262,6 +260,23 @@ function formatMetricValue(value: number, minimumFractionDigits = 2, maximumFrac
 function formatSignedMetric(value: number, minimumFractionDigits = 2, maximumFractionDigits = 6): string {
   const sign = value > 0 ? "+" : "";
   return `${sign}${formatMetricValue(value, minimumFractionDigits, maximumFractionDigits)}`;
+}
+
+type MarkerCapableSeries = {
+  setMarkers?: (markers: Array<Record<string, unknown>>) => void;
+};
+
+function safeSetMarkers(series: unknown, markers: Array<Record<string, unknown>>): void {
+  const candidate = series as MarkerCapableSeries | null;
+  if (!candidate || typeof candidate.setMarkers !== "function") {
+    return;
+  }
+
+  try {
+    candidate.setMarkers(markers);
+  } catch (error) {
+    console.warn("[TradingChart] Failed to update markers", error);
+  }
 }
 
 function findNearestActualCandle(candles: Candle[], targetUnix: number): { candle: Candle; diff: number } | null {
@@ -532,8 +547,8 @@ export default function TradingChart({
       return;
     }
 
-    predictionLineSeriesRef.current.setMarkers([]);
-    forecastCandleSeriesRef.current.setMarkers([]);
+    safeSetMarkers(predictionLineSeriesRef.current, []);
+    safeSetMarkers(forecastCandleSeriesRef.current, []);
     lastForecastMarkerKeyRef.current = "";
   };
 
@@ -582,16 +597,12 @@ export default function TradingChart({
           isForecast: false,
         };
 
-    const x = Math.max(8, Math.round(targetPoint?.x ?? 8));
-    const y = Math.max(8, Math.round(targetPoint?.y ?? 8));
     const previousClose = payload.open;
     const change = payload.close - previousClose;
     const changePct = previousClose === 0 ? 0 : (change / previousClose) * 100;
     const rangePct = previousClose === 0 ? 0 : ((payload.high - payload.low) / Math.abs(previousClose)) * 100;
 
     return {
-      x,
-      y,
       timeLabel: formatCrosshairTimeLabel(payload.timeUnix as UTCTimestamp, timeZoneRef.current),
       open: payload.open,
       high: payload.high,
@@ -859,71 +870,79 @@ export default function TradingChart({
     }
 
     const handleCrosshairMove = (param: MouseEventParams<Time>) => {
-      const points = forecastHoverPointsRef.current;
-      if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0 || points.length === 0) {
-        clearForecastMarkers();
-        return;
-      }
+      try {
+        const points = forecastHoverPointsRef.current;
+        if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0 || points.length === 0) {
+          clearForecastMarkers();
+          return;
+        }
 
-      const hoverUnix = Math.floor(chartTimeToDate(param.time).getTime() / 1000);
-      if (!Number.isFinite(hoverUnix)) {
-        clearForecastMarkers();
-        return;
-      }
+        const hoverUnix = Math.floor(chartTimeToDate(param.time).getTime() / 1000);
+        if (!Number.isFinite(hoverUnix)) {
+          clearForecastMarkers();
+          return;
+        }
 
-      const nearest = findNearestForecastPoint(points, hoverUnix);
-      const stepSeconds = Math.max(1, forecastStepSecondsRef.current);
-      if (!nearest || nearest.diff > stepSeconds * 1.1) {
-        clearForecastMarkers();
-        return;
-      }
+        const nearest = findNearestForecastPoint(points, hoverUnix);
+        const stepSeconds = Math.max(1, forecastStepSecondsRef.current);
+        if (!nearest || nearest.diff > stepSeconds * 1.1) {
+          clearForecastMarkers();
+          return;
+        }
 
-      const markerKey = `${nearest.point.time}|${nearest.point.high}|${nearest.point.low}|${nearest.point.close}`;
-      if (lastForecastMarkerKeyRef.current === markerKey) {
-        return;
-      }
+        const markerKey = `${nearest.point.time}|${nearest.point.high}|${nearest.point.low}|${nearest.point.close}`;
+        if (lastForecastMarkerKeyRef.current === markerKey) {
+          return;
+        }
 
-      predictionLineSeriesRef.current?.setMarkers([
-        {
-          time: nearest.point.time,
-          position: "inBar",
-          color: "#8c52ff",
-          shape: "circle",
-        },
-      ]);
-      forecastCandleSeriesRef.current?.setMarkers([
-        {
-          time: nearest.point.time,
-          position: "aboveBar",
-          color: "#f8c13a",
-          shape: "circle",
-        },
-        {
-          time: nearest.point.time,
-          position: "belowBar",
-          color: "#34d5ff",
-          shape: "circle",
-        },
-      ]);
-      lastForecastMarkerKeyRef.current = markerKey;
+        safeSetMarkers(predictionLineSeriesRef.current, [
+          {
+            time: nearest.point.time,
+            position: "aboveBar",
+            color: "#8c52ff",
+            shape: "circle",
+          },
+        ]);
+        safeSetMarkers(forecastCandleSeriesRef.current, [
+          {
+            time: nearest.point.time,
+            position: "aboveBar",
+            color: "#f8c13a",
+            shape: "circle",
+          },
+          {
+            time: nearest.point.time,
+            position: "belowBar",
+            color: "#34d5ff",
+            shape: "circle",
+          },
+        ]);
+        lastForecastMarkerKeyRef.current = markerKey;
+      } catch (error) {
+        console.warn("[TradingChart] Crosshair handler failed", error);
+      }
     };
 
     const handleClick = (param: MouseEventParams<Time>) => {
-      if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0) {
-        isInspectPinnedRef.current = false;
-        setInspectSnapshot(null);
-        return;
-      }
+      try {
+        if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0) {
+          isInspectPinnedRef.current = false;
+          setInspectSnapshot(null);
+          return;
+        }
 
-      const snapshot = buildInspectSnapshot(param.time, param.point);
-      if (!snapshot) {
-        isInspectPinnedRef.current = false;
-        setInspectSnapshot(null);
-        return;
-      }
+        const snapshot = buildInspectSnapshot(param.time, param.point);
+        if (!snapshot) {
+          isInspectPinnedRef.current = false;
+          setInspectSnapshot(null);
+          return;
+        }
 
-      isInspectPinnedRef.current = true;
-      setInspectSnapshot(snapshot);
+        isInspectPinnedRef.current = true;
+        setInspectSnapshot(snapshot);
+      } catch (error) {
+        console.warn("[TradingChart] Click handler failed", error);
+      }
     };
 
     const handleEscapeKey = (event: KeyboardEvent) => {
@@ -1302,13 +1321,8 @@ export default function TradingChart({
   const showNoDataMessage = candles.length === 0 && !syncOverlayVisible && !isPredicting;
   const showInvalidDataMessage =
     candles.length > 0 && normalizedInputCandles.length === 0 && !syncOverlayVisible && !isPredicting;
-  const inspectTooltipMaxLeft = Math.max(14, (wrapperRef.current?.clientWidth ?? 340) - 250);
-  const inspectTooltipLeft = inspectSnapshot
-    ? Math.max(14, Math.min(inspectSnapshot.x + 14, inspectTooltipMaxLeft))
-    : 14;
-  const inspectTooltipTop = inspectSnapshot
-    ? Math.max(12, Math.min(inspectSnapshot.y + 12, 440 - 248))
-    : 12;
+  const inspectTooltipLeft = 12;
+  const inspectTooltipTop = 12;
 
   return (
     <div ref={wrapperRef} className="relative space-y-2">
