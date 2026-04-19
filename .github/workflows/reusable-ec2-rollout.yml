@@ -52,17 +52,21 @@ jobs:
         env:
           INSTANCE_ID: ${{ inputs.ec2-instance-id }}
           IMAGE_URI: ${{ inputs.image-uri }}
+          AWS_REGION: ${{ inputs.aws-region }}
           TIMEOUT_SECONDS: ${{ inputs.command-timeout-seconds }}
         run: |
+          ECR_REGISTRY=$(echo "$IMAGE_URI" | cut -d/ -f1)
+
           cat > rollout-commands.json <<EOF
           {
             "commands": [
               "set -euo pipefail",
-              "IMAGE_URI='${IMAGE_URI}'",
-              "echo [rollout] image=$IMAGE_URI",
-              "docker pull $IMAGE_URI",
+              "echo [rollout] region=${AWS_REGION} ecr=${ECR_REGISTRY}",
+              "echo [rollout] image=${IMAGE_URI}",
+              "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}",
+              "docker pull ${IMAGE_URI}",
               "docker rm -f aetherforecast-backend-canary || true",
-              "docker run -d --name aetherforecast-backend-canary --restart unless-stopped -p 8080:80 --env-file /opt/aetherforecast/.env -v /opt/aetherforecast/caddy_data:/data -v /opt/aetherforecast/caddy_config:/config $IMAGE_URI",
+              "docker run -d --name aetherforecast-backend-canary --restart unless-stopped -p 8080:80 --env-file /opt/aetherforecast/.env -v /opt/aetherforecast/caddy_data:/data -v /opt/aetherforecast/caddy_config:/config ${IMAGE_URI}",
               "sleep 5",
               "curl -fsS --max-time 10 http://127.0.0.1:8080/health",
               "docker rm -f aetherforecast-backend-old || true",
@@ -70,11 +74,11 @@ jobs:
               "docker rename aetherforecast-backend aetherforecast-backend-old || true",
               "docker stop aetherforecast-backend-canary",
               "docker rm -f aetherforecast-backend-canary",
-              "docker create --name aetherforecast-backend --restart unless-stopped -p 80:80 -p 443:443 --env-file /opt/aetherforecast/.env -v /opt/aetherforecast/caddy_data:/data -v /opt/aetherforecast/caddy_config:/config $IMAGE_URI",
+              "docker create --name aetherforecast-backend --restart unless-stopped -p 80:80 -p 443:443 --env-file /opt/aetherforecast/.env -v /opt/aetherforecast/caddy_data:/data -v /opt/aetherforecast/caddy_config:/config ${IMAGE_URI}",
               "docker start aetherforecast-backend",
               "sleep 5",
               "curl -fsS --max-time 10 http://127.0.0.1/health",
-              "echo $IMAGE_URI > /opt/aetherforecast/backend-image-uri.txt",
+              "echo ${IMAGE_URI} > /opt/aetherforecast/backend-image-uri.txt",
               "docker rm -f aetherforecast-backend-old || true"
             ]
           }
