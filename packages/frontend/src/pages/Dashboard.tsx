@@ -37,6 +37,13 @@ const MIN_CANDLE_TARGET_BY_TIMEFRAME: Partial<Record<Timeframe, number>> = {
   "1d": 300,
   "1w": 220,
 };
+const INITIAL_FAST_LOAD_LIMIT = 700;
+const HOT_PRELOAD_LIMIT = 600;
+const BACKGROUND_HISTORY_TARGET_LIMIT = 4200;
+const BACKGROUND_HISTORY_MIN_TARGET = 3200;
+const CHART_CACHE_TTL_MS = 5 * 60 * 1000;
+const CHART_SWITCH_DEBOUNCE_MS = 180;
+const HOT_PRELOAD_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XAUTUSDT"] as const;
 const MAX_CANDLE_BUFFER = 12000;
 const BINANCE_TICKER_REFRESH_MS = 45_000;
 
@@ -102,6 +109,10 @@ function timeframeChartLimit(timeframe: Timeframe): number {
 
 function timeframeOlderPageLimit(timeframe: Timeframe): number {
   return Math.max(280, Math.floor(timeframeChartLimit(timeframe) * 0.45));
+}
+
+function buildChartCacheKey(symbol: string, timeframe: Timeframe): string {
+  return `${symbol.toUpperCase()}::${timeframe}`;
 }
 
 function minimumChartCandles(timeframe: Timeframe): number {
@@ -271,6 +282,7 @@ export default function Dashboard() {
     timeframe,
     symbols,
     chartCandles,
+    chartCache,
     prediction,
     loadingSymbols,
     loadingChart,
@@ -284,6 +296,7 @@ export default function Dashboard() {
     setTimeframe,
     setSymbols,
     setChartCandles,
+    setChartCacheEntry,
     setPrediction,
     setLoadingSymbols,
     setLoadingChart,
@@ -316,8 +329,16 @@ export default function Dashboard() {
   const lastLazyLoadAnchorRef = useRef<string | null>(null);
   const previousHorizonHoursRef = useRef<number>(selectedHorizonHours);
   const chartCandlesRef = useRef<Candle[]>(chartCandles);
+  const chartCacheRef = useRef(chartCache);
   const wsWasOfflineRef = useRef(false);
   const backfillInFlightRef = useRef(false);
+  const chartSwitchTimerRef = useRef<number | null>(null);
+  const chartLoadSequenceRef = useRef(0);
+  const activeChartKeyRef = useRef<string>(buildChartCacheKey(symbol, timeframe));
+  const activeHydrationKeysRef = useRef<Set<string>>(new Set());
+  const preloadInFlightRef = useRef(false);
+  const [backgroundHydrating, setBackgroundHydrating] = useState(false);
+  const [lastInitialLoadMs, setLastInitialLoadMs] = useState<number | null>(null);
 
   const debouncedQuery = useDebouncedValue(searchQuery, 180);
 
@@ -355,24 +376,38 @@ export default function Dashboard() {
   }, [chartCandles, binanceTicker]);
 
   const fetchChartWithBackfill = useCallback(
-    async (requestedLimit: number): Promise<Candle[]> => {
-      const initialCandles = await fetchChart(symbol, timeframe, requestedLimit);
-      if (initialCandles.length === 0) {
-        return initialCandles;
+    async (
+      targetSymbol: string,
+      targetTimeframe: Timeframe,
+      requestedLimit: number,
+      minimumTarget: number,
+      seedCandles: Candle[] = [],
+    ): Promise<Candle[]> => {
+      let merged = seedCandles;
+      if (merged.length === 0) {
+        merged = await fetchChart(targetSymbol, targetTimeframe, requestedLimit);
       }
 
-      const desiredMinimum = Math.min(requestedLimit, minimumChartCandles(timeframe));
-      if (initialCandles.length >= desiredMinimum) {
-        return initialCandles;
+      if (merged.length === 0) {
+        return merged;
       }
 
-      let merged = initialCandles;
+      const desiredMinimum = Math.max(1, Math.min(requestedLimit, minimumTarget));
+      if (merged.length >= desiredMinimum) {
+        return merged;
+      }
+
       let anchor = merged[0]?.timestamp;
       let attempts = 0;
-      const maxAttempts = 6;
+      const maxAttempts = 10;
 
       while (merged.length < desiredMinimum && anchor && attempts < maxAttempts) {
-        const olderBatch = await fetchChart(symbol, timeframe, timeframeOlderPageLimit(timeframe), anchor);
+        const olderBatch = await fetchChart(
+          targetSymbol,
+          targetTimeframe,
+          timeframeOlderPageLimit(targetTimeframe),
+          anchor,
+        );
         if (olderBatch.length === 0) {
           break;
         }
@@ -394,12 +429,71 @@ export default function Dashboard() {
 
       return merged;
     },
-    [symbol, timeframe],
+    [],
+  );
+
+  const hydrateChartHistory = useCallback(
+    async (
+      targetSymbol: string,
+      targetTimeframe: Timeframe,
+      cacheKey: string,
+      seedCandles: Candle[],
+    ) => {
+      if (seedCandles.length === 0 || seedCandles.length >= BACKGROUND_HISTORY_TARGET_LIMIT) {
+        return;
+      }
+      if (activeHydrationKeysRef.current.has(cacheKey)) {
+        return;
+      }
+
+      activeHydrationKeysRef.current.add(cacheKey);
+      const activeAtStart = activeChartKeyRef.current === cacheKey;
+      if (activeAtStart) {
+        setBackgroundHydrating(true);
+      }
+
+      try {
+        const hydratedCandles = await fetchChartWithBackfill(
+          targetSymbol,
+          targetTimeframe,
+          BACKGROUND_HISTORY_TARGET_LIMIT,
+          BACKGROUND_HISTORY_MIN_TARGET,
+          seedCandles,
+        );
+
+        if (hydratedCandles.length > 0) {
+          setChartCacheEntry(cacheKey, {
+            candles: hydratedCandles,
+            fetchedAt: Date.now(),
+          });
+
+          if (activeChartKeyRef.current === cacheKey) {
+            setChartCandles((previous) => mergeCandles(previous, hydratedCandles));
+          }
+        }
+      } catch (error) {
+        console.warn("[Dashboard] Background chart hydration failed", error);
+      } finally {
+        activeHydrationKeysRef.current.delete(cacheKey);
+        if (activeChartKeyRef.current === cacheKey || activeAtStart) {
+          setBackgroundHydrating(false);
+        }
+      }
+    },
+    [fetchChartWithBackfill, setChartCacheEntry, setChartCandles],
   );
 
   useEffect(() => {
     chartCandlesRef.current = chartCandles;
   }, [chartCandles]);
+
+  useEffect(() => {
+    chartCacheRef.current = chartCache;
+  }, [chartCache]);
+
+  useEffect(() => {
+    activeChartKeyRef.current = buildChartCacheKey(symbol, timeframe);
+  }, [symbol, timeframe]);
 
   const loadSymbols = useCallback(async () => {
     if (!token) {
@@ -427,31 +521,102 @@ export default function Dashboard() {
     }
   }, [token, symbol, setLoadingSymbols, setErrorMessage, setSymbols, setSymbol]);
 
-  const loadChart = useCallback(async () => {
-    if (!token || !symbol) {
-      return;
-    }
+  const loadChartProgressive = useCallback(
+    async (
+      targetSymbol: string,
+      targetTimeframe: Timeframe,
+      options: { forceRefresh?: boolean } = {},
+    ) => {
+      if (!token || !targetSymbol) {
+        return;
+      }
 
-    setLoadingChart(true);
-    setErrorMessage("");
+      const forceRefresh = options.forceRefresh ?? false;
+      const cacheKey = buildChartCacheKey(targetSymbol, targetTimeframe);
+      activeChartKeyRef.current = cacheKey;
 
-    try {
-      const candles = await fetchChartWithBackfill(timeframeChartLimit(timeframe));
-      setChartCandles(candles);
-      setApiStatus("online");
-    } catch (error) {
-      setApiStatus("offline");
-      setErrorMessage(
-        resolveApiErrorMessage(
-          error,
-          "Unable to load chart data. Verify backend, token, and S3 parquet data.",
-        ),
-      );
-      setChartCandles([]);
-    } finally {
-      setLoadingChart(false);
-    }
-  }, [token, symbol, fetchChartWithBackfill, setLoadingChart, setErrorMessage, setChartCandles, setApiStatus]);
+      const now = Date.now();
+      const cachedEntry = chartCacheRef.current[cacheKey];
+      const isFreshCache =
+        !!cachedEntry && cachedEntry.candles.length > 0 && now - cachedEntry.fetchedAt <= CHART_CACHE_TTL_MS;
+
+      if (cachedEntry && cachedEntry.candles.length > 0) {
+        setChartCandles(cachedEntry.candles);
+        setApiStatus("online");
+        setLoadingChart(false);
+      }
+
+      if (isFreshCache && !forceRefresh) {
+        setLastInitialLoadMs(0);
+        return;
+      }
+
+      const sequence = ++chartLoadSequenceRef.current;
+      const hasCachedChart = !!cachedEntry && cachedEntry.candles.length > 0;
+      if (!hasCachedChart) {
+        setChartCandles([]);
+        setLoadingChart(true);
+      } else {
+        setLoadingChart(false);
+      }
+      setErrorMessage("");
+
+      const startedAt = performance.now();
+      try {
+        const fastCandles = await fetchChart(targetSymbol, targetTimeframe, INITIAL_FAST_LOAD_LIMIT);
+        if (sequence !== chartLoadSequenceRef.current || activeChartKeyRef.current !== cacheKey) {
+          return;
+        }
+
+        const initialSnapshot =
+          fastCandles.length > 0
+            ? mergeCandles(cachedEntry?.candles ?? [], fastCandles)
+            : (cachedEntry?.candles ?? []);
+
+        setChartCandles(initialSnapshot);
+        setChartCacheEntry(cacheKey, {
+          candles: initialSnapshot,
+          fetchedAt: Date.now(),
+        });
+        setApiStatus("online");
+        setLoadingChart(false);
+        setLastInitialLoadMs(performance.now() - startedAt);
+
+        if (initialSnapshot.length > 0 && initialSnapshot.length < BACKGROUND_HISTORY_TARGET_LIMIT) {
+          void hydrateChartHistory(targetSymbol, targetTimeframe, cacheKey, initialSnapshot);
+        }
+      } catch (error) {
+        if (sequence !== chartLoadSequenceRef.current || activeChartKeyRef.current !== cacheKey) {
+          return;
+        }
+
+        setLoadingChart(false);
+        if (!hasCachedChart) {
+          setApiStatus("offline");
+          setErrorMessage(
+            resolveApiErrorMessage(
+              error,
+              "Unable to load chart data. Verify backend, token, and S3 parquet data.",
+            ),
+          );
+          setChartCandles([]);
+          return;
+        }
+
+        setApiStatus("online");
+        setErrorMessage("Loaded cached chart data. Live refresh will retry automatically.");
+      }
+    },
+    [
+      token,
+      hydrateChartHistory,
+      setLoadingChart,
+      setErrorMessage,
+      setChartCandles,
+      setApiStatus,
+      setChartCacheEntry,
+    ],
+  );
 
   const backfillLatestCandles = useCallback(async () => {
     if (!token || !symbol) {
@@ -460,17 +625,27 @@ export default function Dashboard() {
 
     try {
       const latestSnapshotLimit = Math.max(360, Math.min(1800, timeframeChartLimit(timeframe)));
-      const candles = await fetchChartWithBackfill(latestSnapshotLimit);
+      const candles = await fetchChartWithBackfill(
+        symbol,
+        timeframe,
+        latestSnapshotLimit,
+        Math.max(900, minimumChartCandles(timeframe)),
+      );
       if (candles.length === 0) {
         return;
       }
 
+      const cacheKey = buildChartCacheKey(symbol, timeframe);
       setChartCandles((previous) => mergeCandles(previous, candles));
+      setChartCacheEntry(cacheKey, {
+        candles: mergeCandles(chartCandlesRef.current, candles),
+        fetchedAt: Date.now(),
+      });
       setApiStatus("online");
     } catch {
       setApiStatus("offline");
     }
-  }, [token, symbol, timeframe, fetchChartWithBackfill, setChartCandles, setApiStatus]);
+  }, [token, symbol, timeframe, fetchChartWithBackfill, setChartCandles, setChartCacheEntry, setApiStatus]);
 
   const loadOlderCandles = useCallback(
     async (oldestTimestamp: string) => {
@@ -488,6 +663,7 @@ export default function Dashboard() {
       setLoadingOlderCandles(true);
 
       try {
+        const cacheKey = buildChartCacheKey(symbol, timeframe);
         const olderCandles = await fetchChart(
           symbol,
           timeframe,
@@ -510,6 +686,10 @@ export default function Dashboard() {
           }
 
           return merged;
+        });
+        setChartCacheEntry(cacheKey, {
+          candles: mergeCandles(chartCandlesRef.current, olderCandles),
+          fetchedAt: Date.now(),
         });
 
         setApiStatus("online");
@@ -534,6 +714,7 @@ export default function Dashboard() {
       loadingOlderCandles,
       setApiStatus,
       setChartCandles,
+      setChartCacheEntry,
       setErrorMessage,
     ],
   );
@@ -554,7 +735,12 @@ export default function Dashboard() {
 
     try {
       const freshSnapshotLimit = Math.max(240, Math.min(1200, timeframeChartLimit(timeframe)));
-      const freshestChartCandles = await fetchChartWithBackfill(freshSnapshotLimit);
+      const freshestChartCandles = await fetchChartWithBackfill(
+        symbol,
+        timeframe,
+        freshSnapshotLimit,
+        Math.max(900, minimumChartCandles(timeframe)),
+      );
       const predictionSource = freshestChartCandles.length > 0 ? freshestChartCandles : chartCandles;
 
       if (predictionSource.length < 20) {
@@ -563,6 +749,10 @@ export default function Dashboard() {
 
       if (freshestChartCandles.length > 0) {
         setChartCandles((previous) => mergeCandles(previous, freshestChartCandles));
+        setChartCacheEntry(buildChartCacheKey(symbol, timeframe), {
+          candles: mergeCandles(chartCandlesRef.current, freshestChartCandles),
+          fetchedAt: Date.now(),
+        });
       }
 
       const latestCandles = predictionSource.slice(-500);
@@ -605,6 +795,7 @@ export default function Dashboard() {
     setPrediction,
     setApiStatus,
     fetchChartWithBackfill,
+    setChartCacheEntry,
   ]);
 
   useEffect(() => {
@@ -697,17 +888,114 @@ export default function Dashboard() {
   }, [loadSymbols]);
 
   useEffect(() => {
-    void loadChart();
-  }, [loadChart]);
+    if (!token || !symbol) {
+      return;
+    }
 
-  useEffect(() => {
     hasMoreHistoryRef.current = true;
     lastLazyLoadAnchorRef.current = null;
     wsWasOfflineRef.current = false;
     backfillInFlightRef.current = false;
     setLoadingOlderCandles(false);
-    setChartCandles([]);
-  }, [symbol, timeframe, setChartCandles]);
+
+    const cacheKey = buildChartCacheKey(symbol, timeframe);
+    const now = Date.now();
+    const cachedEntry = chartCacheRef.current[cacheKey];
+    const hasCachedChart = !!cachedEntry && cachedEntry.candles.length > 0;
+    const isFreshCache = hasCachedChart && now - cachedEntry.fetchedAt <= CHART_CACHE_TTL_MS;
+
+    if (hasCachedChart) {
+      setChartCandles(cachedEntry.candles);
+      setApiStatus("online");
+      setLoadingChart(false);
+    }
+
+    if (chartSwitchTimerRef.current !== null) {
+      window.clearTimeout(chartSwitchTimerRef.current);
+      chartSwitchTimerRef.current = null;
+    }
+
+    if (isFreshCache) {
+      setLastInitialLoadMs(0);
+      return;
+    }
+
+    if (!hasCachedChart) {
+      setChartCandles([]);
+      setLoadingChart(true);
+    }
+
+    chartSwitchTimerRef.current = window.setTimeout(() => {
+      void loadChartProgressive(symbol, timeframe);
+    }, CHART_SWITCH_DEBOUNCE_MS);
+
+    return () => {
+      if (chartSwitchTimerRef.current !== null) {
+        window.clearTimeout(chartSwitchTimerRef.current);
+        chartSwitchTimerRef.current = null;
+      }
+    };
+  }, [
+    token,
+    symbol,
+    timeframe,
+    hydrateChartHistory,
+    loadChartProgressive,
+    setApiStatus,
+    setChartCandles,
+    setLoadingChart,
+  ]);
+
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
+    if (preloadInFlightRef.current) {
+      return;
+    }
+
+    let cancelled = false;
+    preloadInFlightRef.current = true;
+
+    const preloadHotCharts = async () => {
+      try {
+        for (const hotSymbol of HOT_PRELOAD_SYMBOLS) {
+          if (cancelled) {
+            break;
+          }
+
+          const cacheKey = buildChartCacheKey(hotSymbol, timeframe);
+          const cachedEntry = chartCacheRef.current[cacheKey];
+          if (cachedEntry && Date.now() - cachedEntry.fetchedAt <= CHART_CACHE_TTL_MS) {
+            continue;
+          }
+
+          try {
+            const candles = await fetchChart(hotSymbol, timeframe, HOT_PRELOAD_LIMIT);
+            if (cancelled || candles.length === 0) {
+              continue;
+            }
+
+            setChartCacheEntry(cacheKey, {
+              candles,
+              fetchedAt: Date.now(),
+            });
+          } catch {
+            // Silent preload failure should not block dashboard UX.
+          }
+        }
+      } finally {
+        preloadInFlightRef.current = false;
+      }
+    };
+
+    void preloadHotCharts();
+
+    return () => {
+      cancelled = true;
+      preloadInFlightRef.current = false;
+    };
+  }, [token, timeframe, setChartCacheEntry]);
 
   useEffect(() => {
     if (!token || !symbol) {
@@ -775,11 +1063,11 @@ export default function Dashboard() {
     }
 
     const interval = window.setInterval(() => {
-      void loadChart();
+      void loadChartProgressive(symbol, timeframe, { forceRefresh: true });
     }, 45000);
 
     return () => window.clearInterval(interval);
-  }, [token, wsStatus, loadChart]);
+  }, [token, wsStatus, symbol, timeframe, loadChartProgressive]);
 
   useEffect(() => {
     if (!token) {
@@ -854,7 +1142,15 @@ export default function Dashboard() {
             });
           }
 
-          setChartCandles((previous) => upsertRealtimeCandle(previous, message));
+          setChartCandles((previous) => {
+            const next = upsertRealtimeCandle(previous, message);
+            const cacheKey = buildChartCacheKey(symbol, timeframe);
+            setChartCacheEntry(cacheKey, {
+              candles: next,
+              fetchedAt: Date.now(),
+            });
+            return next;
+          });
         },
         (status) => {
           setWsStatus(status);
@@ -893,7 +1189,7 @@ export default function Dashboard() {
         socketRef.current = null;
       }
     };
-  }, [token, symbol, timeframe, backfillLatestCandles, setChartCandles, setWsStatus]);
+  }, [token, symbol, timeframe, backfillLatestCandles, setChartCandles, setChartCacheEntry, setWsStatus]);
 
   const handleAuthenticated = (value: string) => {
     setToken(value);
@@ -957,10 +1253,16 @@ export default function Dashboard() {
               <div className="text-right">
                 <p className="text-xs text-violet-200/70">
                   {loadingChart
-                    ? "Syncing chart..."
+                    ? "Loading recent candles..."
+                    : backgroundHydrating
+                      ? `Hydrating deeper history... (${chartCandles.length})`
                     : loadingOlderCandles
                       ? `Loading older candles... (${chartCandles.length})`
-                      : `Candles loaded: ${chartCandles.length}`}
+                      : `Candles loaded: ${chartCandles.length}${
+                          lastInitialLoadMs !== null && lastInitialLoadMs > 0
+                            ? ` · initial ${Math.round(lastInitialLoadMs)}ms`
+                            : ""
+                        }`}
                 </p>
                 <RegionalClockBadge
                   timeZone={regionalClock.timeZone}
@@ -979,7 +1281,7 @@ export default function Dashboard() {
               timeZone={regionalClock.timeZone}
               onRequestOlderCandles={loadOlderCandles}
               isLoadingOlder={loadingOlderCandles}
-              isSyncing={loadingChart || (chartCandles.length === 0 && wsStatus !== "online")}
+              isSyncing={loadingChart}
               isPredicting={loadingPrediction}
             />
           </section>

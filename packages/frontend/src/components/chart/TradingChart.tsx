@@ -1321,12 +1321,32 @@ export default function TradingChart({
   const showNoDataMessage = candles.length === 0 && !syncOverlayVisible && !isPredicting;
   const showInvalidDataMessage =
     candles.length > 0 && normalizedInputCandles.length === 0 && !syncOverlayVisible && !isPredicting;
+  const showChartSkeleton = syncOverlayVisible && !isPredicting && normalizedInputCandles.length === 0;
+  const showStatusOverlay = isPredicting || (syncOverlayVisible && !showChartSkeleton);
   const inspectTooltipLeft = 12;
   const inspectTooltipTop = 12;
 
   return (
     <div ref={wrapperRef} className="relative space-y-2">
-      {(syncOverlayVisible || isPredicting) && (
+      {showChartSkeleton && (
+        <div className="pointer-events-none absolute inset-0 z-20 rounded-xl border border-cyan-300/20 bg-cosmic-900/55 p-4">
+          <div className="mb-3 h-4 w-48 animate-pulse rounded bg-cyan-200/20" />
+          <div className="flex h-[420px] items-end gap-1.5">
+            {Array.from({ length: 36 }).map((_, index) => {
+              const minHeight = 18;
+              const variance = ((index * 31) % 78) + minHeight;
+              return (
+                <span
+                  key={`chart-skeleton-${index}`}
+                  className="h-full w-full max-w-[16px] animate-pulse rounded-sm bg-gradient-to-t from-violet-500/25 via-cyan-300/20 to-transparent"
+                  style={{ height: `${variance}%` }}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {showStatusOverlay && (
         <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-xl border border-cyan-300/20 bg-cosmic-900/40 backdrop-blur-[1px]">
           <div className="flex items-center gap-3 rounded-full border border-cyan-300/40 bg-cosmic-900/85 px-4 py-2 text-xs font-medium text-cyan-100">
             <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-cyan-300" />

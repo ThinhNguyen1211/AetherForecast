@@ -275,10 +275,12 @@ export async function fetchSymbols(): Promise<string[]> {
 export async function fetchChart(
   symbol: string,
   timeframe: Timeframe,
-  limit = 1200,
+  limit = 800,
   fromTimestamp?: string,
+  timeoutMs = 12_000,
 ): Promise<Candle[]> {
   const response = await api.get<ChartResponse>(`/chart/${symbol}`, {
+    timeout: timeoutMs,
     params: {
       timeframe,
       limit,

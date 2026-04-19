@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 import logging
 import math
+import time
 from typing import Any
 
 import boto3
@@ -140,6 +141,36 @@ class S3ParquetClient:
             endpoint_url=settings.aws_endpoint_url,
             config=client_config,
         )
+        self._chart_cache_ttl_seconds = 30.0
+        self._chart_cache_max_entries = 256
+        self._chart_cache: dict[tuple[str, str, int, int | None], tuple[float, list[dict[str, float | str]]]] = {}
+
+    def _get_cached_chart_records(
+        self,
+        cache_key: tuple[str, str, int, int | None],
+    ) -> list[dict[str, float | str]] | None:
+        cached = self._chart_cache.get(cache_key)
+        if cached is None:
+            return None
+
+        cached_at, records = cached
+        if time.monotonic() - cached_at > self._chart_cache_ttl_seconds:
+            self._chart_cache.pop(cache_key, None)
+            return None
+
+        return [dict(record) for record in records]
+
+    def _set_cached_chart_records(
+        self,
+        cache_key: tuple[str, str, int, int | None],
+        records: list[dict[str, float | str]],
+    ) -> None:
+        self._chart_cache[cache_key] = (time.monotonic(), [dict(record) for record in records])
+        while len(self._chart_cache) > self._chart_cache_max_entries:
+            oldest_key = next(iter(self._chart_cache), None)
+            if oldest_key is None:
+                break
+            self._chart_cache.pop(oldest_key, None)
 
     def _candidate_base_paths(self, symbol: str, timeframe: str) -> list[str]:
         normalized_prefix = self.settings.parquet_prefix.strip("/")
@@ -174,6 +205,7 @@ class S3ParquetClient:
         start_datetime: datetime | None,
         end_datetime: datetime | None,
         timeframe: str,
+        symbol: str,
     ):
         if start_datetime is None and end_datetime is None and not timeframe:
             return None
@@ -182,6 +214,10 @@ class S3ParquetClient:
             try:
                 partition_timeframe = partition.get("timeframe")
                 if partition_timeframe is not None and partition_timeframe.strip().lower() != timeframe:
+                    return False
+
+                partition_symbol = partition.get("symbol")
+                if partition_symbol is not None and partition_symbol.strip().upper() != symbol:
                     return False
 
                 year_raw = partition.get("year")
@@ -331,7 +367,7 @@ class S3ParquetClient:
             else datetime.now(timezone.utc)
         )
 
-        partition_filter = self._build_partition_filter(start_datetime, end_datetime, timeframe)
+        partition_filter = self._build_partition_filter(start_datetime, end_datetime, timeframe, symbol)
 
         if wr is not None:
             for base_path in base_paths:
@@ -546,6 +582,11 @@ class S3ParquetClient:
                     detail=f"Invalid from_timestamp '{from_timestamp}': {exc}",
                 ) from exc
 
+        cache_key = (symbol, normalized_timeframe, requested_limit, before_timestamp_ms)
+        cached_records = self._get_cached_chart_records(cache_key)
+        if cached_records is not None:
+            return cached_records
+
         window_days = self._estimate_partition_window_days(normalized_timeframe, requested_limit)
         window_end = before_datetime if before_datetime is not None else datetime.now(timezone.utc)
         window_start = window_end - timedelta(days=window_days)
@@ -586,7 +627,9 @@ class S3ParquetClient:
         )
 
         if not live_records and parquet_records:
-            return parquet_records[-requested_limit:]
+            output = parquet_records[-requested_limit:]
+            self._set_cached_chart_records(cache_key, output)
+            return output
 
         if not live_records and not parquet_records:
             return []
@@ -609,6 +652,7 @@ class S3ParquetClient:
             if len(merged_records) > requested_limit:
                 merged_records = merged_records[-requested_limit:]
 
+        self._set_cached_chart_records(cache_key, merged_records)
         return merged_records
 
 

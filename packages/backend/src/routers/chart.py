@@ -13,7 +13,7 @@ router = APIRouter(tags=["chart"])
 def get_chart(
     symbol: str,
     timeframe: SupportedTimeframe = Query(default="1h"),
-    limit: int = Query(default=1200, ge=200, le=5000),
+    limit: int = Query(default=800, ge=200, le=5000),
     from_timestamp: datetime | None = Query(default=None),
     _claims: dict = Depends(require_authenticated_user),
     s3_client: S3ParquetClient = Depends(get_s3_parquet_client),

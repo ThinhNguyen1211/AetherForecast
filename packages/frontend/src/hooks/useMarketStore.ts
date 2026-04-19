@@ -9,12 +9,18 @@ import {
   saveAuthToken,
 } from "@/services/api";
 
+export interface ChartCacheEntry {
+  candles: Candle[];
+  fetchedAt: number;
+}
+
 interface MarketState {
   token: string;
   symbol: string;
   timeframe: Timeframe;
   symbols: string[];
   chartCandles: Candle[];
+  chartCache: Record<string, ChartCacheEntry>;
   prediction: PredictResponse | null;
   loadingSymbols: boolean;
   loadingChart: boolean;
@@ -28,6 +34,9 @@ interface MarketState {
   setTimeframe: (timeframe: Timeframe) => void;
   setSymbols: (symbols: string[]) => void;
   setChartCandles: (candles: Candle[] | ((prev: Candle[]) => Candle[])) => void;
+  setChartCacheEntry: (key: string, entry: ChartCacheEntry) => void;
+  removeChartCacheEntry: (key: string) => void;
+  clearChartCache: () => void;
   setPrediction: (prediction: PredictResponse | null) => void;
   setLoadingSymbols: (value: boolean) => void;
   setLoadingChart: (value: boolean) => void;
@@ -45,6 +54,7 @@ export const useMarketStore = create<MarketState>((set) => ({
   timeframe: "1h",
   symbols: [],
   chartCandles: [],
+  chartCache: {},
   prediction: null,
   loadingSymbols: false,
   loadingChart: false,
@@ -58,7 +68,7 @@ export const useMarketStore = create<MarketState>((set) => ({
   },
   clearToken: () => {
     clearAuthToken();
-    set({ token: "" });
+    set({ token: "", chartCache: {} });
   },
   setSymbol: (symbol) => set({ symbol }),
   setTimeframe: (timeframe) => set({ timeframe }),
@@ -67,6 +77,24 @@ export const useMarketStore = create<MarketState>((set) => ({
     set((state) => ({
       chartCandles: typeof candles === "function" ? candles(state.chartCandles) : candles,
     })),
+  setChartCacheEntry: (key, entry) =>
+    set((state) => ({
+      chartCache: {
+        ...state.chartCache,
+        [key]: entry,
+      },
+    })),
+  removeChartCacheEntry: (key) =>
+    set((state) => {
+      if (!state.chartCache[key]) {
+        return state;
+      }
+
+      const nextCache = { ...state.chartCache };
+      delete nextCache[key];
+      return { chartCache: nextCache };
+    }),
+  clearChartCache: () => set({ chartCache: {} }),
   setPrediction: (prediction) => set({ prediction }),
   setLoadingSymbols: (loadingSymbols) => set({ loadingSymbols }),
   setLoadingChart: (loadingChart) => set({ loadingChart }),
