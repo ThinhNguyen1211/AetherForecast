@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BusinessDay,
   CandlestickData,
   ColorType,
+  CrosshairMode,
   HistogramData,
   IChartApi,
   LineData,
   LineStyle,
   LogicalRange,
+  MouseEventParams,
   TickMarkType,
   Time,
   UTCTimestamp,
@@ -40,6 +42,29 @@ interface IndicatorLine {
 interface ForecastOverlayCache {
   forecastSeries: LineData<UTCTimestamp>[];
   forecastCandles: CandlestickData<UTCTimestamp>[];
+}
+
+interface ForecastHoverPoint {
+  time: UTCTimestamp;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+interface InspectSnapshot {
+  x: number;
+  y: number;
+  timeLabel: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  change: number;
+  changePct: number;
+  rangePct: number;
+  volume: number | null;
+  isForecast: boolean;
 }
 
 function parseTimestampMs(timestamp: string): number {
@@ -225,6 +250,78 @@ function timeframeSeconds(timeframe: string): number {
     default:
       return 60 * 60;
   }
+}
+
+function formatMetricValue(value: number, minimumFractionDigits = 2, maximumFractionDigits = 6): string {
+  return value.toLocaleString("vi-VN", {
+    minimumFractionDigits,
+    maximumFractionDigits,
+  });
+}
+
+function formatSignedMetric(value: number, minimumFractionDigits = 2, maximumFractionDigits = 6): string {
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatMetricValue(value, minimumFractionDigits, maximumFractionDigits)}`;
+}
+
+function findNearestActualCandle(candles: Candle[], targetUnix: number): { candle: Candle; diff: number } | null {
+  if (candles.length === 0) {
+    return null;
+  }
+
+  let nearest: Candle | null = null;
+  let nearestDiff = Number.POSITIVE_INFINITY;
+
+  for (const candle of candles) {
+    const candidateUnix = toUnix(candle.timestamp);
+    const diff = Math.abs(Number(candidateUnix) - targetUnix);
+    if (diff < nearestDiff) {
+      nearest = candle;
+      nearestDiff = diff;
+      continue;
+    }
+
+    if (Number(candidateUnix) > targetUnix && diff > nearestDiff) {
+      break;
+    }
+  }
+
+  if (!nearest) {
+    return null;
+  }
+
+  return { candle: nearest, diff: nearestDiff };
+}
+
+function findNearestForecastPoint(
+  points: ForecastHoverPoint[],
+  targetUnix: number,
+): { point: ForecastHoverPoint; diff: number } | null {
+  if (points.length === 0) {
+    return null;
+  }
+
+  let nearest: ForecastHoverPoint | null = null;
+  let nearestDiff = Number.POSITIVE_INFINITY;
+
+  for (const point of points) {
+    const diff = Math.abs(Number(point.time) - targetUnix);
+    if (diff < nearestDiff) {
+      nearest = point;
+      nearestDiff = diff;
+      continue;
+    }
+
+    if (Number(point.time) > targetUnix && diff > nearestDiff) {
+      break;
+    }
+  }
+
+  if (!nearest) {
+    return null;
+  }
+
+  return { point: nearest, diff: nearestDiff };
 }
 
 function toCandlestickPoint(candle: Candle): CandlestickData<UTCTimestamp> {
@@ -415,11 +512,98 @@ export default function TradingChart({
   const lastIndicatorCandleTimeRef = useRef<number>(Number.NaN);
   const overlayCacheKeyRef = useRef("");
   const overlayCacheRef = useRef<ForecastOverlayCache | null>(null);
+  const forecastHoverPointsRef = useRef<ForecastHoverPoint[]>([]);
+  const forecastStepSecondsRef = useRef<number>(timeframeSeconds(timeframe));
+  const lastForecastMarkerKeyRef = useRef<string>("");
+  const isInspectPinnedRef = useRef(false);
   const resolvedTimeZone =
     timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const timeZoneRef = useRef<string>(resolvedTimeZone);
   const normalizedInputCandles = useMemo(() => sanitizeCandles(candles), [candles]);
   const syncOverlayVisible = isSyncing;
+  const [inspectSnapshot, setInspectSnapshot] = useState<InspectSnapshot | null>(null);
+
+  const clearForecastMarkers = () => {
+    if (!predictionLineSeriesRef.current || !forecastCandleSeriesRef.current) {
+      return;
+    }
+
+    if (!lastForecastMarkerKeyRef.current) {
+      return;
+    }
+
+    predictionLineSeriesRef.current.setMarkers([]);
+    forecastCandleSeriesRef.current.setMarkers([]);
+    lastForecastMarkerKeyRef.current = "";
+  };
+
+  const buildInspectSnapshot = (
+    targetTime: Time,
+    targetPoint: MouseEventParams<Time>["point"] | undefined,
+  ): InspectSnapshot | null => {
+    const targetUnix = Math.floor(chartTimeToDate(targetTime).getTime() / 1000);
+    if (!Number.isFinite(targetUnix)) {
+      return null;
+    }
+
+    const actual = findNearestActualCandle(normalizedCandlesRef.current, targetUnix);
+    const forecast = findNearestForecastPoint(forecastHoverPointsRef.current, targetUnix);
+
+    const stepSeconds = Math.max(1, forecastStepSecondsRef.current);
+    const maxActualDiff = stepSeconds * 2.5;
+    const maxForecastDiff = stepSeconds * 1.25;
+    const actualCandidate = actual && actual.diff <= maxActualDiff ? actual : null;
+    const forecastCandidate = forecast && forecast.diff <= maxForecastDiff ? forecast : null;
+
+    if (!actualCandidate && !forecastCandidate) {
+      return null;
+    }
+
+    const useForecast =
+      !!forecastCandidate && (!actualCandidate || forecastCandidate.diff <= actualCandidate.diff);
+
+    const payload = useForecast
+      ? {
+          timeUnix: Number(forecastCandidate?.point.time ?? 0),
+          open: Number(forecastCandidate?.point.open ?? 0),
+          high: Number(forecastCandidate?.point.high ?? 0),
+          low: Number(forecastCandidate?.point.low ?? 0),
+          close: Number(forecastCandidate?.point.close ?? 0),
+          volume: null as number | null,
+          isForecast: true,
+        }
+      : {
+          timeUnix: Number(toUnix(actualCandidate!.candle.timestamp)),
+          open: Number(actualCandidate!.candle.open),
+          high: Number(actualCandidate!.candle.high),
+          low: Number(actualCandidate!.candle.low),
+          close: Number(actualCandidate!.candle.close),
+          volume: Number(actualCandidate!.candle.volume),
+          isForecast: false,
+        };
+
+    const x = Math.max(8, Math.round(targetPoint?.x ?? 8));
+    const y = Math.max(8, Math.round(targetPoint?.y ?? 8));
+    const previousClose = payload.open;
+    const change = payload.close - previousClose;
+    const changePct = previousClose === 0 ? 0 : (change / previousClose) * 100;
+    const rangePct = previousClose === 0 ? 0 : ((payload.high - payload.low) / Math.abs(previousClose)) * 100;
+
+    return {
+      x,
+      y,
+      timeLabel: formatCrosshairTimeLabel(payload.timeUnix as UTCTimestamp, timeZoneRef.current),
+      open: payload.open,
+      high: payload.high,
+      low: payload.low,
+      close: payload.close,
+      change,
+      changePct,
+      rangePct,
+      volume: payload.volume,
+      isForecast: payload.isForecast,
+    };
+  };
 
   useEffect(() => {
     normalizedCandlesRef.current = normalizedInputCandles;
@@ -484,6 +668,7 @@ export default function TradingChart({
           formatAxisTimeLabel(value, timeZoneRef.current, tickMarkType),
       },
       crosshair: {
+        mode: CrosshairMode.Normal,
         vertLine: { color: "rgba(0,255,255,0.4)", labelBackgroundColor: "#211038" },
         horzLine: { color: "rgba(140,82,255,0.45)", labelBackgroundColor: "#211038" },
       },
@@ -535,7 +720,10 @@ export default function TradingChart({
       lineStyle: LineStyle.Solid,
       priceLineVisible: false,
       lastValueVisible: false,
-      crosshairMarkerVisible: false,
+      crosshairMarkerVisible: true,
+      crosshairMarkerRadius: 4,
+      crosshairMarkerBorderColor: "#8c52ff",
+      crosshairMarkerBackgroundColor: "#8c52ff",
     });
     predictionLineSeriesRef.current = predictionLineSeries;
 
@@ -665,6 +853,101 @@ export default function TradingChart({
   }, []);
 
   useEffect(() => {
+    const mainChart = mainChartApiRef.current;
+    if (!mainChart || !predictionLineSeriesRef.current || !forecastCandleSeriesRef.current) {
+      return;
+    }
+
+    const handleCrosshairMove = (param: MouseEventParams<Time>) => {
+      const points = forecastHoverPointsRef.current;
+      if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0 || points.length === 0) {
+        clearForecastMarkers();
+        return;
+      }
+
+      const hoverUnix = Math.floor(chartTimeToDate(param.time).getTime() / 1000);
+      if (!Number.isFinite(hoverUnix)) {
+        clearForecastMarkers();
+        return;
+      }
+
+      const nearest = findNearestForecastPoint(points, hoverUnix);
+      const stepSeconds = Math.max(1, forecastStepSecondsRef.current);
+      if (!nearest || nearest.diff > stepSeconds * 1.1) {
+        clearForecastMarkers();
+        return;
+      }
+
+      const markerKey = `${nearest.point.time}|${nearest.point.high}|${nearest.point.low}|${nearest.point.close}`;
+      if (lastForecastMarkerKeyRef.current === markerKey) {
+        return;
+      }
+
+      predictionLineSeriesRef.current?.setMarkers([
+        {
+          time: nearest.point.time,
+          position: "inBar",
+          color: "#8c52ff",
+          shape: "circle",
+        },
+      ]);
+      forecastCandleSeriesRef.current?.setMarkers([
+        {
+          time: nearest.point.time,
+          position: "aboveBar",
+          color: "#f8c13a",
+          shape: "circle",
+        },
+        {
+          time: nearest.point.time,
+          position: "belowBar",
+          color: "#34d5ff",
+          shape: "circle",
+        },
+      ]);
+      lastForecastMarkerKeyRef.current = markerKey;
+    };
+
+    const handleClick = (param: MouseEventParams<Time>) => {
+      if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0) {
+        isInspectPinnedRef.current = false;
+        setInspectSnapshot(null);
+        return;
+      }
+
+      const snapshot = buildInspectSnapshot(param.time, param.point);
+      if (!snapshot) {
+        isInspectPinnedRef.current = false;
+        setInspectSnapshot(null);
+        return;
+      }
+
+      isInspectPinnedRef.current = true;
+      setInspectSnapshot(snapshot);
+    };
+
+    const handleEscapeKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      isInspectPinnedRef.current = false;
+      setInspectSnapshot(null);
+    };
+
+    mainChart.subscribeCrosshairMove(handleCrosshairMove);
+    mainChart.subscribeClick(handleClick);
+    window.addEventListener("keydown", handleEscapeKey);
+
+    return () => {
+      mainChart.unsubscribeCrosshairMove(handleCrosshairMove);
+      mainChart.unsubscribeClick(handleClick);
+      window.removeEventListener("keydown", handleEscapeKey);
+      clearForecastMarkers();
+    };
+  }, [timeframe]);
+
+  useEffect(() => {
     lazyLoadAnchorRef.current = null;
     hasInitialFitRef.current = false;
     shouldAutoFollowRef.current = true;
@@ -675,6 +958,11 @@ export default function TradingChart({
     lastIndicatorCandleTimeRef.current = Number.NaN;
     overlayCacheKeyRef.current = "";
     overlayCacheRef.current = null;
+    forecastHoverPointsRef.current = [];
+    forecastStepSecondsRef.current = timeframeSeconds(timeframe);
+    isInspectPinnedRef.current = false;
+    setInspectSnapshot(null);
+    clearForecastMarkers();
   }, [timeframe, symbol]);
 
   useEffect(() => {
@@ -710,6 +998,8 @@ export default function TradingChart({
       macdSignalRef.current.setData([]);
       overlayCacheKeyRef.current = "";
       overlayCacheRef.current = null;
+      forecastHoverPointsRef.current = [];
+      clearForecastMarkers();
       lastIndicatorRefreshAtRef.current = 0;
       lastIndicatorCandleTimeRef.current = Number.NaN;
       hasInitialFitRef.current = false;
@@ -751,6 +1041,14 @@ export default function TradingChart({
       if (cachedOverlay) {
         predictionLineSeriesRef.current.setData(cachedOverlay.forecastSeries);
         forecastCandleSeriesRef.current.setData(cachedOverlay.forecastCandles);
+        forecastHoverPointsRef.current = cachedOverlay.forecastCandles.map((item) => ({
+          time: item.time,
+          open: item.open,
+          high: item.high,
+          low: item.low,
+          close: item.close,
+        }));
+        forecastStepSecondsRef.current = Math.max(1, timeframeSeconds(timeframe));
       } else {
         const lastCandle = normalizedInputCandles[normalizedInputCandles.length - 1];
         const fallbackAnchorTime = toUnix(lastCandle.timestamp);
@@ -795,8 +1093,13 @@ export default function TradingChart({
           averageRecentRange * 3.5,
           anchorMagnitude * forecastRangeCapRatio(timeframe) * 1.65,
         );
+        const firstCandleDriftCap = Math.max(
+          averageRecentRange * 1.25,
+          anchorMagnitude * forecastRangeCapRatio(timeframe) * 0.95,
+        );
 
         const forecastCandles: CandlestickData<UTCTimestamp>[] = [];
+        const forecastHoverPoints: ForecastHoverPoint[] = [];
         for (let index = 0; index < prediction.prediction_array.length; index += 1) {
           const time = (anchorTime + (index + 1) * stepSeconds) as UTCTimestamp;
           const open = index === 0 ? anchorClose : prediction.prediction_array[index - 1];
@@ -842,16 +1145,25 @@ export default function TradingChart({
               ? index / (prediction.prediction_array.length - 1)
               : 0;
           const driftCap = maxGlobalDrift * (1 + normalizedIndex * 0.55);
+          const activeDriftCap = index === 0 ? Math.min(driftCap, firstCandleDriftCap) : driftCap;
           const perCandleWickCap = Math.max(baseWickRangeCap, Math.abs(close - open) * 1.4);
+          const activeWickCap = index === 0 ? perCandleWickCap * 0.58 : perCandleWickCap;
           const upperHardCap = Math.max(open, close, anchorClose + driftCap);
           const lowerHardCap = Math.min(open, close, anchorClose - driftCap);
 
-          const cappedHigh = Math.min(rawHigh, bodyHigh + perCandleWickCap, upperHardCap);
-          const cappedLow = Math.max(rawLow, bodyLow - perCandleWickCap, lowerHardCap);
+          const cappedHigh = Math.min(rawHigh, bodyHigh + activeWickCap, anchorClose + activeDriftCap, upperHardCap);
+          const cappedLow = Math.max(rawLow, bodyLow - activeWickCap, anchorClose - activeDriftCap, lowerHardCap);
           const high = Math.max(bodyHigh, cappedHigh);
           const low = Math.min(bodyLow, cappedLow);
 
           forecastCandles.push({ time, open, high, low, close });
+          forecastHoverPoints.push({
+            time,
+            open,
+            high,
+            low,
+            close,
+          });
         }
 
         const overlayCache: ForecastOverlayCache = {
@@ -864,12 +1176,16 @@ export default function TradingChart({
 
         predictionLineSeriesRef.current.setData(overlayCache.forecastSeries);
         forecastCandleSeriesRef.current.setData(overlayCache.forecastCandles);
+        forecastHoverPointsRef.current = forecastHoverPoints;
+        forecastStepSecondsRef.current = Math.max(1, stepSeconds);
       }
     } else {
       forecastCandleSeriesRef.current.setData([]);
       predictionLineSeriesRef.current.setData([]);
       overlayCacheRef.current = null;
       overlayCacheKeyRef.current = "";
+      forecastHoverPointsRef.current = [];
+      clearForecastMarkers();
     }
 
     const latestCandleTimeMs = parseTimestampMs(
@@ -986,6 +1302,13 @@ export default function TradingChart({
   const showNoDataMessage = candles.length === 0 && !syncOverlayVisible && !isPredicting;
   const showInvalidDataMessage =
     candles.length > 0 && normalizedInputCandles.length === 0 && !syncOverlayVisible && !isPredicting;
+  const inspectTooltipMaxLeft = Math.max(14, (wrapperRef.current?.clientWidth ?? 340) - 250);
+  const inspectTooltipLeft = inspectSnapshot
+    ? Math.max(14, Math.min(inspectSnapshot.x + 14, inspectTooltipMaxLeft))
+    : 14;
+  const inspectTooltipTop = inspectSnapshot
+    ? Math.max(12, Math.min(inspectSnapshot.y + 12, 440 - 248))
+    : 12;
 
   return (
     <div ref={wrapperRef} className="relative space-y-2">
@@ -1006,6 +1329,41 @@ export default function TradingChart({
         </div>
       )}
       <div ref={mainChartRef} className="h-[440px] rounded-xl border border-violet-400/25" />
+      {inspectSnapshot && (
+        <div
+          className="pointer-events-none absolute z-30 w-[236px] rounded-lg border border-cyan-300/35 bg-cosmic-900/88 px-3 py-2 text-[10px] text-cyan-100 shadow-[0_6px_26px_rgba(0,0,0,0.35)] backdrop-blur-sm"
+          style={{ left: inspectTooltipLeft, top: inspectTooltipTop }}
+        >
+          <div className="mb-1 text-[11px] font-semibold text-cyan-50">
+            {inspectSnapshot.isForecast ? "Dự đoán" : "Thị trường"} · {inspectSnapshot.timeLabel}
+          </div>
+          <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 text-[10px] leading-5">
+            <span className="text-cyan-200/85">Giá mở</span>
+            <span>{formatMetricValue(inspectSnapshot.open)}</span>
+            <span className="text-cyan-200/85">Giá cao</span>
+            <span>{formatMetricValue(inspectSnapshot.high)}</span>
+            <span className="text-cyan-200/85">Giá thấp</span>
+            <span>{formatMetricValue(inspectSnapshot.low)}</span>
+            <span className="text-cyan-200/85">Giá đóng</span>
+            <span>{formatMetricValue(inspectSnapshot.close)}</span>
+            <span className="text-cyan-200/85">Thay đổi</span>
+            <span className={inspectSnapshot.change >= 0 ? "text-cyan-200" : "text-rose-300"}>
+              {formatSignedMetric(inspectSnapshot.change)}
+            </span>
+            <span className="text-cyan-200/85">% Thay đổi</span>
+            <span className={inspectSnapshot.changePct >= 0 ? "text-cyan-200" : "text-rose-300"}>
+              {formatSignedMetric(inspectSnapshot.changePct, 2, 2)}%
+            </span>
+            <span className="text-cyan-200/85">Biên độ</span>
+            <span>{formatMetricValue(inspectSnapshot.rangePct, 2, 2)}%</span>
+            <span className="text-cyan-200/85">Khối lượng</span>
+            <span>
+              {inspectSnapshot.volume !== null ? formatMetricValue(inspectSnapshot.volume, 2, 2) : "--"}
+            </span>
+          </div>
+          <div className="mt-1 text-[10px] text-cyan-200/70">Nhấn Esc để đóng bảng thông tin.</div>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-4 px-1 text-[11px] text-violet-200/75">
         <span className="flex items-center gap-2">
           <span className="inline-block h-[2px] w-5 bg-cyan-300" />
@@ -1019,6 +1377,7 @@ export default function TradingChart({
           <span className="inline-block h-3 w-3 rounded-sm border border-violet-300/80 bg-violet-500/20" />
           <span>Forecast range (high/low)</span>
         </span>
+        <span className="text-cyan-200/75">Click chart to pin OHLC tooltip, Esc to close</span>
       </div>
       {isLoadingOlder && (
         <div className="flex items-center gap-2 px-1 text-[11px] text-cyan-200/70">

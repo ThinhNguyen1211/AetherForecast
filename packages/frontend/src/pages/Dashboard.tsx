@@ -32,6 +32,11 @@ const HISTORICAL_LIMIT_BY_TIMEFRAME: Record<Timeframe, number> = {
   "1d": 1000,
   "1w": 800,
 };
+const MIN_CANDLE_TARGET_BY_TIMEFRAME: Partial<Record<Timeframe, number>> = {
+  "4h": 320,
+  "1d": 300,
+  "1w": 220,
+};
 const MAX_CANDLE_BUFFER = 12000;
 const BINANCE_TICKER_REFRESH_MS = 45_000;
 
@@ -97,6 +102,10 @@ function timeframeChartLimit(timeframe: Timeframe): number {
 
 function timeframeOlderPageLimit(timeframe: Timeframe): number {
   return Math.max(280, Math.floor(timeframeChartLimit(timeframe) * 0.45));
+}
+
+function minimumChartCandles(timeframe: Timeframe): number {
+  return MIN_CANDLE_TARGET_BY_TIMEFRAME[timeframe] ?? Math.min(220, timeframeChartLimit(timeframe));
 }
 
 function toEpochMs(timestamp: string): number {
@@ -345,6 +354,49 @@ export default function Dashboard() {
     };
   }, [chartCandles, binanceTicker]);
 
+  const fetchChartWithBackfill = useCallback(
+    async (requestedLimit: number): Promise<Candle[]> => {
+      const initialCandles = await fetchChart(symbol, timeframe, requestedLimit);
+      if (initialCandles.length === 0) {
+        return initialCandles;
+      }
+
+      const desiredMinimum = Math.min(requestedLimit, minimumChartCandles(timeframe));
+      if (initialCandles.length >= desiredMinimum) {
+        return initialCandles;
+      }
+
+      let merged = initialCandles;
+      let anchor = merged[0]?.timestamp;
+      let attempts = 0;
+      const maxAttempts = 6;
+
+      while (merged.length < desiredMinimum && anchor && attempts < maxAttempts) {
+        const olderBatch = await fetchChart(symbol, timeframe, timeframeOlderPageLimit(timeframe), anchor);
+        if (olderBatch.length === 0) {
+          break;
+        }
+
+        const nextMerged = mergeCandles(merged, olderBatch);
+        if (nextMerged.length === merged.length) {
+          break;
+        }
+
+        merged = nextMerged;
+        const nextAnchor = merged[0]?.timestamp;
+        if (!nextAnchor || nextAnchor === anchor) {
+          break;
+        }
+
+        anchor = nextAnchor;
+        attempts += 1;
+      }
+
+      return merged;
+    },
+    [symbol, timeframe],
+  );
+
   useEffect(() => {
     chartCandlesRef.current = chartCandles;
   }, [chartCandles]);
@@ -384,7 +436,7 @@ export default function Dashboard() {
     setErrorMessage("");
 
     try {
-      const candles = await fetchChart(symbol, timeframe, timeframeChartLimit(timeframe));
+      const candles = await fetchChartWithBackfill(timeframeChartLimit(timeframe));
       setChartCandles(candles);
       setApiStatus("online");
     } catch (error) {
@@ -399,7 +451,7 @@ export default function Dashboard() {
     } finally {
       setLoadingChart(false);
     }
-  }, [token, symbol, timeframe, setLoadingChart, setErrorMessage, setChartCandles, setApiStatus]);
+  }, [token, symbol, fetchChartWithBackfill, setLoadingChart, setErrorMessage, setChartCandles, setApiStatus]);
 
   const backfillLatestCandles = useCallback(async () => {
     if (!token || !symbol) {
@@ -408,7 +460,7 @@ export default function Dashboard() {
 
     try {
       const latestSnapshotLimit = Math.max(360, Math.min(1800, timeframeChartLimit(timeframe)));
-      const candles = await fetchChart(symbol, timeframe, latestSnapshotLimit);
+      const candles = await fetchChartWithBackfill(latestSnapshotLimit);
       if (candles.length === 0) {
         return;
       }
@@ -418,7 +470,7 @@ export default function Dashboard() {
     } catch {
       setApiStatus("offline");
     }
-  }, [token, symbol, timeframe, setChartCandles, setApiStatus]);
+  }, [token, symbol, timeframe, fetchChartWithBackfill, setChartCandles, setApiStatus]);
 
   const loadOlderCandles = useCallback(
     async (oldestTimestamp: string) => {
@@ -502,7 +554,7 @@ export default function Dashboard() {
 
     try {
       const freshSnapshotLimit = Math.max(240, Math.min(1200, timeframeChartLimit(timeframe)));
-      const freshestChartCandles = await fetchChart(symbol, timeframe, freshSnapshotLimit);
+      const freshestChartCandles = await fetchChartWithBackfill(freshSnapshotLimit);
       const predictionSource = freshestChartCandles.length > 0 ? freshestChartCandles : chartCandles;
 
       if (predictionSource.length < 20) {
@@ -552,6 +604,7 @@ export default function Dashboard() {
     setErrorMessage,
     setPrediction,
     setApiStatus,
+    fetchChartWithBackfill,
   ]);
 
   useEffect(() => {
