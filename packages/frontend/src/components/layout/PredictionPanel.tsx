@@ -1,4 +1,5 @@
 import { PredictResponse, Timeframe } from "@/services/api";
+import { PredictionStageDefinition, PredictionStageProgress } from "@/types/predictionProgress";
 
 interface HorizonOption {
   label: string;
@@ -16,6 +17,8 @@ interface PredictionPanelProps {
   selectedHorizonHours: number;
   selectedHorizonBars: number;
   loading: boolean;
+  predictionProgress?: PredictionStageProgress[];
+  activePredictionStage?: PredictionStageDefinition | null;
   onSelectHorizon: (hours: number) => void;
   onPredict: () => void;
 }
@@ -59,6 +62,8 @@ export default function PredictionPanel({
   selectedHorizonHours,
   selectedHorizonBars,
   loading,
+  predictionProgress = [],
+  activePredictionStage = null,
   onSelectHorizon,
   onPredict,
 }: PredictionPanelProps) {
@@ -145,8 +150,47 @@ export default function PredictionPanel({
         disabled={loading}
         className="mt-3 rounded-xl border border-cyan-300/70 bg-cyan-500/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {loading ? "Generating forecast..." : "Generate prediction"}
+        {loading
+          ? `Đang chạy: ${activePredictionStage?.title ?? "Tạo dự đoán"}`
+          : "Generate prediction"}
       </button>
+
+      {loading && predictionProgress.length > 0 && (
+        <div className="mt-3 rounded-xl border border-cyan-300/35 bg-gradient-to-r from-cyan-500/10 via-violet-500/10 to-cosmic-900/65 p-3">
+          <p className="muted-label">Prediction Pipeline</p>
+          <p className="mt-1 text-xs text-cyan-100/90">
+            {activePredictionStage?.description ?? "Đang khởi tạo luồng dự đoán."}
+          </p>
+          <div className="mt-3 space-y-2">
+            {predictionProgress.map((step, index) => (
+              <div
+                key={step.key}
+                className="grid grid-cols-[auto_1fr] items-start gap-x-2 gap-y-0.5 text-[11px]"
+              >
+                <span
+                  className={`mt-1 inline-block h-2.5 w-2.5 rounded-full ${
+                    step.status === "done"
+                      ? "bg-cyan-300"
+                      : step.status === "active"
+                        ? "animate-pulse bg-violet-300"
+                        : "bg-violet-200/30"
+                  }`}
+                />
+                <div>
+                  <p
+                    className={`font-semibold ${
+                      step.status === "pending" ? "text-violet-200/65" : "text-cyan-100"
+                    }`}
+                  >
+                    {index + 1}. {step.title}
+                  </p>
+                  <p className="text-violet-100/70">{step.description}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="mt-4 grid grid-cols-2 gap-3">
         <div className="rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-3">

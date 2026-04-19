@@ -17,6 +17,7 @@ import {
 } from "lightweight-charts";
 
 import { Candle, PredictResponse } from "@/services/api";
+import { PredictionStageDefinition, PredictionStageProgress } from "@/types/predictionProgress";
 
 interface TradingChartProps {
   symbol: string;
@@ -32,6 +33,8 @@ interface TradingChartProps {
   isLoadingOlder?: boolean;
   isSyncing?: boolean;
   isPredicting?: boolean;
+  predictionProgress?: PredictionStageProgress[];
+  activePredictionStage?: PredictionStageDefinition | null;
 }
 
 interface IndicatorLine {
@@ -494,6 +497,8 @@ export default function TradingChart({
   isLoadingOlder = false,
   isSyncing = false,
   isPredicting = false,
+  predictionProgress = [],
+  activePredictionStage = null,
 }: TradingChartProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const mainChartRef = useRef<HTMLDivElement | null>(null);
@@ -539,7 +544,7 @@ export default function TradingChart({
   const [inspectSnapshot, setInspectSnapshot] = useState<InspectSnapshot | null>(null);
 
   const clearForecastMarkers = () => {
-    if (!predictionLineSeriesRef.current || !forecastCandleSeriesRef.current) {
+    if (!predictionLineSeriesRef.current) {
       return;
     }
 
@@ -548,7 +553,6 @@ export default function TradingChart({
     }
 
     safeSetMarkers(predictionLineSeriesRef.current, []);
-    safeSetMarkers(forecastCandleSeriesRef.current, []);
     lastForecastMarkerKeyRef.current = "";
   };
 
@@ -865,7 +869,7 @@ export default function TradingChart({
 
   useEffect(() => {
     const mainChart = mainChartApiRef.current;
-    if (!mainChart || !predictionLineSeriesRef.current || !forecastCandleSeriesRef.current) {
+    if (!mainChart || !predictionLineSeriesRef.current) {
       return;
     }
 
@@ -900,20 +904,6 @@ export default function TradingChart({
             time: nearest.point.time,
             position: "aboveBar",
             color: "#8c52ff",
-            shape: "circle",
-          },
-        ]);
-        safeSetMarkers(forecastCandleSeriesRef.current, [
-          {
-            time: nearest.point.time,
-            position: "aboveBar",
-            color: "#f8c13a",
-            shape: "circle",
-          },
-          {
-            time: nearest.point.time,
-            position: "belowBar",
-            color: "#34d5ff",
             shape: "circle",
           },
         ]);
@@ -1323,6 +1313,19 @@ export default function TradingChart({
     candles.length > 0 && normalizedInputCandles.length === 0 && !syncOverlayVisible && !isPredicting;
   const showChartSkeleton = syncOverlayVisible && !isPredicting && normalizedInputCandles.length === 0;
   const showStatusOverlay = isPredicting || (syncOverlayVisible && !showChartSkeleton);
+  const predictionProgressRatio =
+    predictionProgress.length > 0
+      ? predictionProgress.reduce((sum, step) => {
+          if (step.status === "done") {
+            return sum + 1;
+          }
+          if (step.status === "active") {
+            return sum + 0.55;
+          }
+          return sum;
+        }, 0) / predictionProgress.length
+      : 0;
+  const predictionProgressPercent = Math.max(8, Math.min(100, Math.round(predictionProgressRatio * 100)));
   const inspectTooltipLeft = 12;
   const inspectTooltipTop = 12;
 
@@ -1348,11 +1351,57 @@ export default function TradingChart({
       )}
       {showStatusOverlay && (
         <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-xl border border-cyan-300/20 bg-cosmic-900/40 backdrop-blur-[1px]">
-          <div className="flex items-center gap-3 rounded-full border border-cyan-300/40 bg-cosmic-900/85 px-4 py-2 text-xs font-medium text-cyan-100">
-            <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-cyan-300" />
-            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-cyan-200/30 border-t-cyan-200" />
-            <span>{isPredicting ? "Generating prediction..." : "Syncing chart data..."}</span>
-          </div>
+          {isPredicting ? (
+            <div className="w-[min(95%,560px)] rounded-2xl border border-cyan-300/45 bg-cosmic-950/92 p-4 text-cyan-100 shadow-[0_18px_60px_rgba(0,0,0,0.45)]">
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5 inline-block h-4 w-4 animate-spin rounded-full border-2 border-cyan-200/35 border-t-cyan-100" />
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-cyan-50">Generating prediction...</p>
+                  <p className="text-xs font-medium text-cyan-100/90">
+                    {activePredictionStage?.title ?? "Đang khởi tạo pipeline dự đoán"}
+                  </p>
+                  <p className="mt-1 text-[11px] text-cyan-100/75">
+                    {activePredictionStage?.description ?? "Đang chuẩn bị dữ liệu và kết nối model."}
+                  </p>
+                </div>
+              </div>
+
+              {predictionProgress.length > 0 && (
+                <>
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-violet-300/20">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-cyan-300 via-violet-300 to-cyan-200 transition-all duration-300"
+                      style={{ width: `${predictionProgressPercent}%` }}
+                    />
+                  </div>
+                  <div className="mt-3 grid gap-1.5 sm:grid-cols-2">
+                    {predictionProgress.map((step, index) => (
+                      <div key={step.key} className="flex items-start gap-2 text-[11px]">
+                        <span
+                          className={`mt-1 inline-block h-2.5 w-2.5 rounded-full ${
+                            step.status === "done"
+                              ? "bg-cyan-300"
+                              : step.status === "active"
+                                ? "animate-pulse bg-violet-300"
+                                : "bg-violet-200/35"
+                          }`}
+                        />
+                        <span className={step.status === "pending" ? "text-violet-100/60" : "text-cyan-50"}>
+                          {index + 1}. {step.title}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 rounded-full border border-cyan-300/40 bg-cosmic-900/85 px-4 py-2 text-xs font-medium text-cyan-100">
+              <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-cyan-300" />
+              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-cyan-200/30 border-t-cyan-200" />
+              <span>Syncing chart data...</span>
+            </div>
+          )}
         </div>
       )}
       {(showNoDataMessage || showInvalidDataMessage) && (

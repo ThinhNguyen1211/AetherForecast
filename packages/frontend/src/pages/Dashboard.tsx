@@ -22,6 +22,12 @@ import {
   getAuthToken,
   Timeframe,
 } from "@/services/api";
+import {
+  PREDICTION_PIPELINE_STEPS,
+  PredictionStageDefinition,
+  PredictionStageKey,
+  PredictionStageProgress,
+} from "@/types/predictionProgress";
 
 const HISTORICAL_LIMIT_BY_TIMEFRAME: Record<Timeframe, number> = {
   "1m": 900,
@@ -46,6 +52,8 @@ const CHART_SWITCH_DEBOUNCE_MS = 180;
 const HOT_PRELOAD_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XAUTUSDT"] as const;
 const MAX_CANDLE_BUFFER = 12000;
 const BINANCE_TICKER_REFRESH_MS = 45_000;
+const PREDICTION_STAGE_MIN_VISIBLE_MS = 180;
+const PREDICTION_RENDER_SETTLE_MS = 120;
 
 const FORECAST_HORIZON_OPTIONS = [
   { label: "6H", hours: 6 },
@@ -142,6 +150,12 @@ function timeframeSeconds(timeframe: Timeframe): number {
     default:
       return 60 * 60;
   }
+}
+
+function waitFor(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, milliseconds);
+  });
 }
 
 function computeTickerChange(candles: Candle[]): { changePct: number | null; label: string } {
@@ -337,8 +351,10 @@ export default function Dashboard() {
   const activeChartKeyRef = useRef<string>(buildChartCacheKey(symbol, timeframe));
   const activeHydrationKeysRef = useRef<Set<string>>(new Set());
   const preloadInFlightRef = useRef(false);
+  const predictionStageChangedAtRef = useRef<number>(0);
   const [backgroundHydrating, setBackgroundHydrating] = useState(false);
   const [lastInitialLoadMs, setLastInitialLoadMs] = useState<number | null>(null);
+  const [predictionStage, setPredictionStage] = useState<PredictionStageKey | null>(null);
 
   const debouncedQuery = useDebouncedValue(searchQuery, 180);
 
@@ -346,6 +362,28 @@ export default function Dashboard() {
     const bars = Math.ceil((selectedHorizonHours * 3600) / timeframeSeconds(timeframe));
     return Math.max(1, Math.min(336, bars));
   }, [selectedHorizonHours, timeframe]);
+
+  const activePredictionStage = useMemo<PredictionStageDefinition | null>(() => {
+    if (!predictionStage) {
+      return null;
+    }
+    return PREDICTION_PIPELINE_STEPS.find((step) => step.key === predictionStage) ?? null;
+  }, [predictionStage]);
+
+  const predictionProgress = useMemo<PredictionStageProgress[]>(() => {
+    if (!loadingPrediction) {
+      return [];
+    }
+
+    const activeIndex = predictionStage
+      ? PREDICTION_PIPELINE_STEPS.findIndex((step) => step.key === predictionStage)
+      : -1;
+
+    return PREDICTION_PIPELINE_STEPS.map((step, index) => ({
+      ...step,
+      status: index < activeIndex ? "done" : index === activeIndex ? "active" : "pending",
+    }));
+  }, [loadingPrediction, predictionStage]);
 
   const filteredSymbols = useMemo(() => {
     if (!debouncedQuery) {
@@ -719,6 +757,19 @@ export default function Dashboard() {
     ],
   );
 
+  const advancePredictionStage = useCallback(async (nextStage: PredictionStageKey) => {
+    const previousMark = predictionStageChangedAtRef.current;
+    if (previousMark > 0) {
+      const elapsed = performance.now() - previousMark;
+      if (elapsed < PREDICTION_STAGE_MIN_VISIBLE_MS) {
+        await waitFor(PREDICTION_STAGE_MIN_VISIBLE_MS - elapsed);
+      }
+    }
+
+    predictionStageChangedAtRef.current = performance.now();
+    setPredictionStage(nextStage);
+  }, []);
+
   const runPrediction = useCallback(async () => {
     if (!token) {
       setShowAuthModal(true);
@@ -732,8 +783,10 @@ export default function Dashboard() {
 
     setLoadingPrediction(true);
     setErrorMessage("");
+    predictionStageChangedAtRef.current = 0;
 
     try {
+      await advancePredictionStage("sync_market_data");
       const freshSnapshotLimit = Math.max(240, Math.min(1200, timeframeChartLimit(timeframe)));
       const freshestChartCandles = await fetchChartWithBackfill(
         symbol,
@@ -741,6 +794,8 @@ export default function Dashboard() {
         freshSnapshotLimit,
         Math.max(900, minimumChartCandles(timeframe)),
       );
+
+      await advancePredictionStage("fetch_external_context");
       const predictionSource = freshestChartCandles.length > 0 ? freshestChartCandles : chartCandles;
 
       if (predictionSource.length < 20) {
@@ -755,13 +810,21 @@ export default function Dashboard() {
         });
       }
 
+      await advancePredictionStage("prepare_payload");
       const latestCandles = predictionSource.slice(-500);
-      const result = await fetchPrediction({
+
+      await advancePredictionStage("send_request");
+      const predictionPromise = fetchPrediction({
         symbol,
         timeframe,
         latest_candles: latestCandles,
         horizon: selectedHorizonBars,
       });
+
+      await advancePredictionStage("run_inference");
+      const result = await predictionPromise;
+
+      await advancePredictionStage("render_output");
 
       const anchorCandle = predictionSource[predictionSource.length - 1];
       const anchor = {
@@ -772,6 +835,7 @@ export default function Dashboard() {
       setPrediction(result);
       setPredictionAnchor(anchor);
       setApiStatus("online");
+      await waitFor(PREDICTION_RENDER_SETTLE_MS);
     } catch (error) {
       setApiStatus("offline");
       setErrorMessage(
@@ -782,8 +846,11 @@ export default function Dashboard() {
       );
     } finally {
       setLoadingPrediction(false);
+      setPredictionStage(null);
+      predictionStageChangedAtRef.current = 0;
     }
   }, [
+    advancePredictionStage,
     token,
     chartCandles,
     symbol,
@@ -1283,6 +1350,8 @@ export default function Dashboard() {
               isLoadingOlder={loadingOlderCandles}
               isSyncing={loadingChart}
               isPredicting={loadingPrediction}
+              predictionProgress={predictionProgress}
+              activePredictionStage={activePredictionStage}
             />
           </section>
 
@@ -1297,6 +1366,8 @@ export default function Dashboard() {
             selectedHorizonHours={selectedHorizonHours}
             selectedHorizonBars={selectedHorizonBars}
             loading={loadingPrediction}
+            predictionProgress={predictionProgress}
+            activePredictionStage={activePredictionStage}
             onSelectHorizon={setSelectedHorizonHours}
             onPredict={runPrediction}
           />
