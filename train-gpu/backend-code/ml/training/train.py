@@ -413,7 +413,7 @@ def _train_with_chronos2_native(
     callbacks: list[TrainerCallback],
 ) -> None:
     market_dataframe = load_market_dataframe(dataset_config)
-    candidate_contexts = [config.context_length, 768, 512, 384, 256, 192, 128]
+    candidate_contexts = [config.context_length, 768, 512, 384, 256, 192, 128, 96, 80, 64]
     ordered_contexts: list[int] = []
     for value in candidate_contexts:
         normalized = int(max(64, min(config.context_length, value)))

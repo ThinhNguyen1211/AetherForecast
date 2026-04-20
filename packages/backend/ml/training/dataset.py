@@ -906,7 +906,9 @@ def _load_with_polars(config: TrainingDatasetConfig) -> pd.DataFrame:
 def _load_with_boto3_pandas(config: TrainingDatasetConfig) -> pd.DataFrame:
     session = boto3.Session(region_name=config.aws_region)
     s3 = session.client("s3", endpoint_url=config.aws_endpoint_url)
-    max_files_per_symbol = max(120, int(os.getenv("MAX_PARQUET_FILES_PER_SYMBOL", "1800")))
+    default_file_cap = max(120, int(math.ceil(max(config.max_rows_per_symbol, 1) / 72.0)))
+    max_files_per_symbol = int(os.getenv("MAX_PARQUET_FILES_PER_SYMBOL", str(default_file_cap)))
+    max_files_per_symbol = max(120, min(max_files_per_symbol, 1200))
     dedupe_keys_by_day = os.getenv("PARQUET_KEY_DEDUP_BY_DAY", "0").strip().lower() in {
         "1",
         "true",
@@ -915,8 +917,15 @@ def _load_with_boto3_pandas(config: TrainingDatasetConfig) -> pd.DataFrame:
     }
 
     dataframes: list[pd.DataFrame] = []
+    total_symbols = len(config.symbols)
 
-    for symbol in config.symbols:
+    for symbol_index, symbol in enumerate(config.symbols, start=1):
+        logger.info(
+            "Loading symbol %s (%s/%s) via boto3+pandas fallback",
+            symbol,
+            symbol_index,
+            total_symbols,
+        )
         loaded_frame: pd.DataFrame | None = None
 
         for prefix in _candidate_symbol_prefixes(config.data_bucket, symbol):
@@ -954,9 +963,20 @@ def _load_with_boto3_pandas(config: TrainingDatasetConfig) -> pd.DataFrame:
             else:
                 keys = sorted(keys)[-max_files_per_symbol:]
 
-            chunk_frames: list[pd.DataFrame] = []
+            logger.info(
+                "Symbol %s prefix %s: discovered=%s selected=%s parquet files",
+                symbol,
+                object_prefix,
+                len(keys),
+                min(len(keys), max_files_per_symbol),
+            )
 
-            for key in keys:
+            chunk_frames: list[pd.DataFrame] = []
+            target_rows = max(config.max_rows_per_symbol, config.context_length * 4)
+            loaded_rows = 0
+            selected_keys = list(reversed(keys))
+
+            for key_index, key in enumerate(selected_keys, start=1):
                 try:
                     obj = s3.get_object(Bucket=config.data_bucket, Key=key)
                     payload = obj["Body"].read()
@@ -967,6 +987,25 @@ def _load_with_boto3_pandas(config: TrainingDatasetConfig) -> pd.DataFrame:
 
                 if not frame.empty:
                     chunk_frames.append(frame)
+                    loaded_rows += len(frame)
+
+                if key_index % 100 == 0:
+                    logger.info(
+                        "Symbol %s: read %s/%s parquet files (loaded_rows=%s)",
+                        symbol,
+                        key_index,
+                        len(selected_keys),
+                        loaded_rows,
+                    )
+
+                if loaded_rows >= target_rows:
+                    logger.info(
+                        "Symbol %s: reached target_rows=%s after %s files, stopping early",
+                        symbol,
+                        target_rows,
+                        key_index,
+                    )
+                    break
 
             if not chunk_frames:
                 continue
