@@ -11,20 +11,20 @@ router = APIRouter(tags=["predict"])
 logger = logging.getLogger(__name__)
 
 _BASE_HISTORY_BY_TIMEFRAME = {
-    "1m": 1200,
-    "5m": 1250,
-    "15m": 1350,
-    "1h": 1500,
-    "4h": 1700,
-    "1d": 1800,
-    "1w": 1300,
+    "1m": 1500,
+    "5m": 1650,
+    "15m": 1900,
+    "1h": 2300,
+    "4h": 2700,
+    "1d": 3200,
+    "1w": 2800,
 }
 
 
 def _resolve_history_limit(request: PredictRequest) -> int:
-    base_limit = _BASE_HISTORY_BY_TIMEFRAME.get(request.timeframe, 1400)
-    horizon_boost = max(0, int(request.horizon) - 24) * 8
-    return max(700, min(2200, base_limit + horizon_boost))
+    base_limit = _BASE_HISTORY_BY_TIMEFRAME.get(request.timeframe, 2000)
+    horizon_boost = max(0, int(request.horizon) - 24) * 12
+    return max(1200, min(4200, base_limit + horizon_boost))
 
 
 @router.post("/predict", response_model=PredictResponse)
@@ -41,6 +41,7 @@ def predict_price(
             symbol=request.symbol,
             timeframe=request.timeframe,
             limit=history_limit,
+            use_cache=False,
         )
         if len(backend_candles) < 20:
             raise ValueError("Insufficient real chart candles available for robust Chronos inference")

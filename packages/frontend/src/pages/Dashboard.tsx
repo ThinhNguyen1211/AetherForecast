@@ -925,41 +925,43 @@ export default function Dashboard() {
 
     try {
       await advancePredictionStage("sync_market_data");
-      let predictionSource = chartCandlesRef.current;
+      const freshSnapshotLimit = Math.max(360, Math.min(1600, timeframeChartLimit(timeframe)));
+      let predictionSource = await fetchChart(
+        symbol,
+        timeframe,
+        freshSnapshotLimit,
+        undefined,
+        CHART_FETCH_TIMEOUT_MS,
+        { retries: 2 },
+      );
 
-      if (predictionSource.length < 120) {
-        try {
-          const latestChartCandles = await fetchChart(
-            symbol,
-            timeframe,
-            Math.max(180, Math.min(900, timeframeChartLimit(timeframe))),
-            undefined,
-            CHART_FETCH_TIMEOUT_MS,
-            { retries: 2 },
-          );
+      if (predictionSource.length === 0) {
+        throw new Error("Unable to fetch latest market candles for prediction.");
+      }
 
-          if (latestChartCandles.length > 0) {
-            const mergedSnapshot = mergeCandles(predictionSource, latestChartCandles);
-            predictionSource = mergedSnapshot;
-            setChartCandles(mergedSnapshot);
-            setChartCacheEntry(buildChartCacheKey(symbol, timeframe), {
-              candles: mergedSnapshot,
-              fetchedAt: Date.now(),
-            });
-          }
-        } catch (chartSyncError) {
-          if (predictionSource.length < 10) {
-            throw chartSyncError;
-          }
-          console.warn("[Dashboard] Prediction chart sync failed, proceeding with current real snapshot", chartSyncError);
-        }
+      const desiredPredictionCandles = Math.max(220, minimumChartCandles(timeframe));
+      if (predictionSource.length < desiredPredictionCandles) {
+        predictionSource = await fetchChartWithBackfill(
+          symbol,
+          timeframe,
+          Math.max(freshSnapshotLimit, 1200),
+          desiredPredictionCandles,
+          predictionSource,
+        );
       }
 
       await advancePredictionStage("fetch_external_context");
 
-      if (predictionSource.length < 10) {
-        throw new Error("Prediction requires at least 10 real candles. Please wait for chart sync to finish.");
+      if (predictionSource.length < 20) {
+        throw new Error("Prediction requires at least 20 real candles. Please wait for latest sync.");
       }
+
+      const mergedSnapshot = mergeCandles(chartCandlesRef.current, predictionSource);
+      setChartCandles(mergedSnapshot);
+      setChartCacheEntry(buildChartCacheKey(symbol, timeframe), {
+        candles: mergedSnapshot,
+        fetchedAt: Date.now(),
+      });
 
       await advancePredictionStage("prepare_payload");
       const latestCandles = predictionSource.slice(-PREDICTION_PAYLOAD_LIMIT);
@@ -1010,6 +1012,7 @@ export default function Dashboard() {
     setErrorMessage,
     setPrediction,
     setApiStatus,
+    fetchChartWithBackfill,
   ]);
 
   useEffect(() => {
@@ -1531,7 +1534,7 @@ export default function Dashboard() {
               timeZone={regionalClock.timeZone}
               onRequestOlderCandles={loadOlderCandles}
               isLoadingOlder={loadingOlderCandles}
-              isSyncing={loadingChart}
+              isSyncing={loadingChart || backgroundHydrating}
               isPredicting={loadingPrediction}
               predictionProgress={predictionProgress}
               activePredictionStage={activePredictionStage}

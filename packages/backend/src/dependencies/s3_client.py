@@ -565,6 +565,7 @@ class S3ParquetClient:
         timeframe: str,
         limit: int = 1200,
         from_timestamp: Any | None = None,
+        use_cache: bool = True,
     ) -> list[dict]:
         symbol = symbol.upper()
         normalized_timeframe = _normalize_timeframe(timeframe)
@@ -583,9 +584,10 @@ class S3ParquetClient:
                 ) from exc
 
         cache_key = (symbol, normalized_timeframe, requested_limit, before_timestamp_ms)
-        cached_records = self._get_cached_chart_records(cache_key)
-        if cached_records is not None:
-            return cached_records
+        if use_cache:
+            cached_records = self._get_cached_chart_records(cache_key)
+            if cached_records is not None:
+                return cached_records
 
         window_days = self._estimate_partition_window_days(normalized_timeframe, requested_limit)
         window_end = before_datetime if before_datetime is not None else datetime.now(timezone.utc)
@@ -628,7 +630,8 @@ class S3ParquetClient:
 
         if not live_records and parquet_records:
             output = parquet_records[-requested_limit:]
-            self._set_cached_chart_records(cache_key, output)
+            if use_cache:
+                self._set_cached_chart_records(cache_key, output)
             return output
 
         if not live_records and not parquet_records:
@@ -652,7 +655,8 @@ class S3ParquetClient:
             if len(merged_records) > requested_limit:
                 merged_records = merged_records[-requested_limit:]
 
-        self._set_cached_chart_records(cache_key, merged_records)
+        if use_cache:
+            self._set_cached_chart_records(cache_key, merged_records)
         return merged_records
 
 

@@ -3,6 +3,7 @@ from functools import lru_cache
 import logging
 import math
 import re
+import time
 from statistics import pstdev
 from typing import Any
 
@@ -369,6 +370,41 @@ class ForecastInferenceService:
         except Exception as exc:
             logger.exception("External sentiment scoring failed for %s", request.symbol.upper())
             raise RuntimeError(f"External sentiment scoring failed: {exc}") from exc
+
+    def _estimate_external_sentiment_with_retries(
+        self,
+        request: PredictRequest,
+        *,
+        max_attempts: int = 3,
+    ) -> tuple[float, str, float, str]:
+        last_error: RuntimeError | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self._estimate_sentiment_score(
+                    request,
+                    force_external_refresh=True,
+                    require_external=True,
+                )
+            except RuntimeError as sentiment_error:
+                last_error = sentiment_error
+                if attempt >= max_attempts:
+                    break
+
+                backoff_seconds = 0.75 * attempt
+                logger.warning(
+                    "External sentiment attempt %s/%s failed for %s. Retrying in %.2fs: %s",
+                    attempt,
+                    max_attempts,
+                    request.symbol.upper(),
+                    backoff_seconds,
+                    sentiment_error,
+                )
+                time.sleep(backoff_seconds)
+
+        raise RuntimeError(
+            f"External sentiment is required but unavailable after {max_attempts} attempts: {last_error}"
+        ) from last_error
 
     def _extract_numbers(self, text: str, horizon: int) -> list[float]:
         values = [float(item) for item in NUMERIC_REGEX.findall(text)]
@@ -766,28 +802,9 @@ class ForecastInferenceService:
         horizon = int(request.horizon)
         num_samples = max(10, min(64, int(self.settings.inference_num_samples)))
 
-        # Prefer live external sentiment, but never fail prediction when external feeds are temporarily unavailable.
-        try:
-            sentiment_score, sentiment_source, external_sentiment_score, external_sentiment_source = (
-                self._estimate_sentiment_score(
-                    request,
-                    force_external_refresh=True,
-                    require_external=True,
-                )
-            )
-        except RuntimeError as sentiment_error:
-            logger.warning(
-                "External sentiment unavailable for %s; fallback to market-only sentiment: %s",
-                request.symbol.upper(),
-                sentiment_error,
-            )
-            sentiment_score, sentiment_source, external_sentiment_score, external_sentiment_source = (
-                self._estimate_sentiment_score(
-                    request,
-                    force_external_refresh=False,
-                    require_external=False,
-                )
-            )
+        sentiment_score, sentiment_source, external_sentiment_score, external_sentiment_source = (
+            self._estimate_external_sentiment_with_retries(request)
+        )
 
         feature_bundle = self._build_context_series(
             request,
