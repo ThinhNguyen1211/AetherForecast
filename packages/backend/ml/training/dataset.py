@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
+import io
 import json
 import logging
 import math
 import os
+import re
 from typing import Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -21,6 +23,34 @@ logger = logging.getLogger(__name__)
 DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 DEFAULT_TIMEFRAMES = "1h,4h,1d"
 BINANCE_ALLOWED_PERIODS = {"5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"}
+
+TIMEFRAME_TO_MINUTES = {
+    "1m": 1,
+    "3m": 3,
+    "5m": 5,
+    "15m": 15,
+    "30m": 30,
+    "1h": 60,
+    "2h": 120,
+    "4h": 240,
+    "6h": 360,
+    "12h": 720,
+    "1d": 1440,
+}
+
+TIMEFRAME_TO_RESAMPLE_RULE = {
+    "1m": "1min",
+    "3m": "3min",
+    "5m": "5min",
+    "15m": "15min",
+    "30m": "30min",
+    "1h": "1h",
+    "2h": "2h",
+    "4h": "4h",
+    "6h": "6h",
+    "12h": "12h",
+    "1d": "1D",
+}
 
 COVARIATE_COLUMNS = [
     "fear_greed_index",
@@ -103,6 +133,98 @@ def _candidate_symbol_prefixes(data_bucket: str, symbol: str) -> list[str]:
         if path not in deduped:
             deduped.append(path)
     return deduped
+
+
+def _timeframe_minutes(value: str) -> int | None:
+    return TIMEFRAME_TO_MINUTES.get(value.strip().lower())
+
+
+def _augment_requested_timeframes(
+    dataframe: pd.DataFrame,
+    requested_timeframes: set[str] | None,
+) -> pd.DataFrame:
+    if requested_timeframes is None or "timeframe" not in dataframe.columns:
+        return dataframe
+
+    normalized_targets = {item.strip().lower() for item in requested_timeframes if item.strip()}
+    if not normalized_targets:
+        return dataframe
+
+    augmented_frames: list[pd.DataFrame] = [dataframe]
+
+    for symbol, symbol_frame in dataframe.groupby("symbol", sort=False):
+        candidate_frames = symbol_frame.copy()
+        candidate_frames["timeframe"] = candidate_frames["timeframe"].astype(str).str.strip().str.lower()
+
+        timeframe_counts = candidate_frames.groupby("timeframe").size().sort_values(ascending=False)
+        if timeframe_counts.empty:
+            continue
+
+        source_timeframe: str | None = None
+        source_minutes: int | None = None
+        for timeframe in timeframe_counts.index.tolist():
+            minutes = _timeframe_minutes(timeframe)
+            if minutes is None:
+                continue
+            if source_minutes is None or minutes < source_minutes:
+                source_minutes = minutes
+                source_timeframe = timeframe
+
+        if source_timeframe is None:
+            continue
+
+        source_rows = candidate_frames[candidate_frames["timeframe"] == source_timeframe].copy()
+        if source_rows.empty:
+            continue
+
+        source_rows = source_rows.sort_values("timestamp")
+        source_indexed = source_rows.set_index("timestamp")
+
+        for target_timeframe in sorted(normalized_targets):
+            if target_timeframe == source_timeframe:
+                continue
+
+            target_minutes = _timeframe_minutes(target_timeframe)
+            if target_minutes is None or source_minutes is None or target_minutes < source_minutes:
+                continue
+
+            existing_count = int(timeframe_counts.get(target_timeframe, 0))
+            if existing_count >= 64:
+                continue
+
+            rule = TIMEFRAME_TO_RESAMPLE_RULE.get(target_timeframe)
+            if not rule:
+                continue
+
+            ohlcv = (
+                source_indexed.resample(rule)
+                .agg(
+                    {
+                        "open": "first",
+                        "high": "max",
+                        "low": "min",
+                        "close": "last",
+                        "volume": "sum",
+                    }
+                )
+                .dropna(subset=["open", "high", "low", "close"])
+            )
+
+            if ohlcv.empty:
+                continue
+
+            rebuilt = ohlcv.reset_index()
+            rebuilt["symbol"] = symbol
+            rebuilt["timeframe"] = target_timeframe
+            augmented_frames.append(rebuilt)
+
+    if len(augmented_frames) == 1:
+        return dataframe
+
+    merged = pd.concat(augmented_frames, ignore_index=True, sort=False)
+    merged = merged.sort_values(["symbol", "timeframe", "timestamp"])
+    merged = merged.drop_duplicates(subset=["symbol", "timeframe", "timestamp"], keep="last")
+    return merged.reset_index(drop=True)
 
 
 def _safe_to_numeric(series: pd.Series) -> pd.Series:
@@ -665,7 +787,7 @@ def add_engineered_features(dataframe: pd.DataFrame, config: TrainingDatasetConf
     engineered["covariate_signal"] = np.tanh(combined_signal)
 
     signal_scale = float(np.clip(config.external_covariate_scale, 0.0003, 0.01))
-    close_values = _safe_to_numeric(engineered["close"]).fillna(method="ffill").fillna(method="bfill")
+    close_values = _safe_to_numeric(engineered["close"]).ffill().bfill()
     engineered["close_adjusted"] = close_values * np.exp(
         np.clip(engineered["covariate_signal"], -3.0, 3.0) * signal_scale
     )
@@ -781,6 +903,96 @@ def _load_with_polars(config: TrainingDatasetConfig) -> pd.DataFrame:
     return pd.concat(dataframes, ignore_index=True)
 
 
+def _load_with_boto3_pandas(config: TrainingDatasetConfig) -> pd.DataFrame:
+    session = boto3.Session(region_name=config.aws_region)
+    s3 = session.client("s3", endpoint_url=config.aws_endpoint_url)
+    max_files_per_symbol = max(120, int(os.getenv("MAX_PARQUET_FILES_PER_SYMBOL", "1800")))
+    dedupe_keys_by_day = os.getenv("PARQUET_KEY_DEDUP_BY_DAY", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+    dataframes: list[pd.DataFrame] = []
+
+    for symbol in config.symbols:
+        loaded_frame: pd.DataFrame | None = None
+
+        for prefix in _candidate_symbol_prefixes(config.data_bucket, symbol):
+            s3_uri_prefix = f"s3://{config.data_bucket}/"
+            object_prefix = prefix
+            if object_prefix.startswith(s3_uri_prefix):
+                object_prefix = object_prefix[len(s3_uri_prefix) :]
+            object_prefix = object_prefix.lstrip("/")
+
+            keys: list[str] = []
+            paginator = s3.get_paginator("list_objects_v2")
+
+            try:
+                for page in paginator.paginate(Bucket=config.data_bucket, Prefix=object_prefix):
+                    for item in page.get("Contents", []):
+                        key = str(item.get("Key", ""))
+                        if key.endswith(".parquet"):
+                            keys.append(key)
+            except Exception as exc:
+                logger.debug("Failed listing parquet objects for %s: %s", object_prefix, exc)
+                continue
+
+            if not keys:
+                continue
+
+            if dedupe_keys_by_day:
+                partition_to_key: dict[str, str] = {}
+                for key in keys:
+                    match = re.search(r"year=\d{4}/month=\d{2}/day=\d{2}", key)
+                    partition = match.group(0) if match else key
+                    previous = partition_to_key.get(partition)
+                    if previous is None or key > previous:
+                        partition_to_key[partition] = key
+                keys = sorted(partition_to_key.values())[-max_files_per_symbol:]
+            else:
+                keys = sorted(keys)[-max_files_per_symbol:]
+
+            chunk_frames: list[pd.DataFrame] = []
+
+            for key in keys:
+                try:
+                    obj = s3.get_object(Bucket=config.data_bucket, Key=key)
+                    payload = obj["Body"].read()
+                    frame = pd.read_parquet(io.BytesIO(payload))
+                except Exception as exc:
+                    logger.debug("Failed reading parquet object s3://%s/%s: %s", config.data_bucket, key, exc)
+                    continue
+
+                if not frame.empty:
+                    chunk_frames.append(frame)
+
+            if not chunk_frames:
+                continue
+
+            loaded_frame = pd.concat(chunk_frames, ignore_index=True)
+            logger.info(
+                "Loaded %s rows for %s from %s via boto3+pandas",
+                len(loaded_frame),
+                symbol,
+                object_prefix,
+            )
+            break
+
+        if loaded_frame is None:
+            logger.warning("No parquet data found for %s via boto3+pandas", symbol)
+            continue
+
+        loaded_frame["symbol"] = symbol
+        dataframes.append(loaded_frame)
+
+    if not dataframes:
+        raise ValueError("No parquet data loaded from S3 with boto3+pandas")
+
+    return pd.concat(dataframes, ignore_index=True)
+
+
 def load_market_dataframe(config: TrainingDatasetConfig) -> pd.DataFrame:
     if not config.data_bucket:
         raise ValueError("DATA_S3_BUCKET (or DATA_BUCKET) is required")
@@ -788,14 +1000,23 @@ def load_market_dataframe(config: TrainingDatasetConfig) -> pd.DataFrame:
     dataframe: pd.DataFrame
     try:
         dataframe = _load_with_awswrangler(config)
-    except Exception:
-        dataframe = _load_with_polars(config)
+    except Exception as awsrangler_exc:
+        logger.debug("awswrangler loader failed, falling back: %s", awsrangler_exc)
+        try:
+            dataframe = _load_with_polars(config)
+        except Exception as polars_exc:
+            logger.warning(
+                "polars loader failed (%s). Falling back to boto3+pandas parquet reader.",
+                polars_exc,
+            )
+            dataframe = _load_with_boto3_pandas(config)
 
     dataframe = _standardize_columns(dataframe)
 
     allowed_timeframes = _parse_timeframes(config.timeframe)
     if "timeframe" in dataframe.columns:
         dataframe["timeframe"] = dataframe["timeframe"].astype(str).str.strip().str.lower()
+        dataframe = _augment_requested_timeframes(dataframe, allowed_timeframes)
         if allowed_timeframes is not None:
             dataframe = dataframe[dataframe["timeframe"].isin(allowed_timeframes)]
     else:

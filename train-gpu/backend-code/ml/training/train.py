@@ -274,12 +274,17 @@ def _prepare_chronos2_inputs(
     return train_inputs, validation_inputs
 
 
-def _resolve_chronos2_num_steps(config: TrainRuntimeConfig, train_inputs: list[np.ndarray]) -> int:
+def _resolve_chronos2_num_steps(
+    config: TrainRuntimeConfig,
+    train_inputs: list[np.ndarray],
+    context_length: int | None = None,
+) -> int:
     if config.chronos2_train_steps > 0:
         return config.chronos2_train_steps
 
-    approx_windows = sum(max(1, len(series) - config.context_length - config.horizon + 1) for series in train_inputs)
-    context_penalty = max(1.0, config.context_length / 256.0)
+    effective_context = int(context_length if context_length is not None else config.context_length)
+    approx_windows = sum(max(1, len(series) - effective_context - config.horizon + 1) for series in train_inputs)
+    context_penalty = max(1.0, effective_context / 256.0)
     denominator = max(int(config.batch_size * 64 * context_penalty), 1)
     steps_per_epoch = max(10, approx_windows // denominator)
     return max(80, min(1800, steps_per_epoch * max(config.epochs, 1)))
@@ -408,14 +413,48 @@ def _train_with_chronos2_native(
     callbacks: list[TrainerCallback],
 ) -> None:
     market_dataframe = load_market_dataframe(dataset_config)
-    train_inputs, validation_inputs = _prepare_chronos2_inputs(
-        market_dataframe,
-        horizon=config.horizon,
-        context_length=config.context_length,
-        train_split_ratio=config.train_split_ratio,
-        walk_forward_windows=config.walk_forward_windows,
-        walk_forward_eval_size=config.walk_forward_eval_size,
-    )
+    candidate_contexts = [config.context_length, 768, 512, 384, 256, 192, 128]
+    ordered_contexts: list[int] = []
+    for value in candidate_contexts:
+        normalized = int(max(64, min(config.context_length, value)))
+        if normalized not in ordered_contexts:
+            ordered_contexts.append(normalized)
+
+    train_inputs: list[np.ndarray] | None = None
+    validation_inputs: list[np.ndarray] | None = None
+    effective_context_length = config.context_length
+    last_context_error: Exception | None = None
+
+    for candidate_context in ordered_contexts:
+        try:
+            train_inputs_candidate, validation_inputs_candidate = _prepare_chronos2_inputs(
+                market_dataframe,
+                horizon=config.horizon,
+                context_length=candidate_context,
+                train_split_ratio=config.train_split_ratio,
+                walk_forward_windows=config.walk_forward_windows,
+                walk_forward_eval_size=config.walk_forward_eval_size,
+            )
+        except Exception as exc:
+            last_context_error = exc
+            continue
+
+        train_inputs = train_inputs_candidate
+        validation_inputs = validation_inputs_candidate
+        effective_context_length = candidate_context
+        break
+
+    if train_inputs is None or validation_inputs is None:
+        if last_context_error is not None:
+            raise last_context_error
+        raise ValueError("Unable to prepare Chronos-2 training inputs for any candidate context length")
+
+    if effective_context_length != config.context_length:
+        logger.warning(
+            "Insufficient history for CONTEXT_LENGTH=%s; falling back to context_length=%s for this run",
+            config.context_length,
+            effective_context_length,
+        )
 
     pipeline, loaded_from = _load_chronos2_pipeline(config)
     logger.info(
@@ -430,12 +469,13 @@ def _train_with_chronos2_native(
     else:
         logger.warning("CUDA is not available. Chronos-2 native fine-tuning will run on CPU.")
 
-    num_steps = _resolve_chronos2_num_steps(config, train_inputs)
+    num_steps = _resolve_chronos2_num_steps(config, train_inputs, context_length=effective_context_length)
     logger.info(
-        "Chronos-2 native fine-tune: train_series=%s validation_series=%s num_steps=%s",
+        "Chronos-2 native fine-tune: train_series=%s validation_series=%s num_steps=%s context_length=%s",
         len(train_inputs),
         len(validation_inputs),
         num_steps,
+        effective_context_length,
     )
 
     lora_config = {
@@ -457,12 +497,12 @@ def _train_with_chronos2_native(
         prediction_length=config.horizon,
         finetune_mode="lora",
         lora_config=lora_config,
-        context_length=config.context_length,
+        context_length=effective_context_length,
         learning_rate=config.learning_rate,
         num_steps=num_steps,
         batch_size=max(1, min(config.batch_size, 2)),
         output_dir=str(output_dir),
-        min_past=max(config.horizon, min(config.context_length, 256)),
+        min_past=max(config.horizon, min(effective_context_length, 256)),
         finetuned_ckpt_name="final-model",
         callbacks=callbacks,
         remove_printer_callback=True,
