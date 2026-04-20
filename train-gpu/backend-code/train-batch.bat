@@ -78,9 +78,11 @@ call :log [train-batch] Run started at %DATE% %TIME%
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='Stop';" ^
   "$chunk=[Math]::Max(15,[Math]::Min(20,[int]$env:COIN_GROUP_SIZE));" ^
-  "$symbols=($env:ALL_SYMBOLS -split ',' | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_ -ne '' } | Select-Object -Unique);" ^
+  "$symbols=@($env:ALL_SYMBOLS -split ',' | ForEach-Object { $_.Trim().ToUpper() } | Where-Object { $_ -ne '' } | Select-Object -Unique);" ^
   "if($symbols.Count -eq 0){ throw 'ALL_SYMBOLS is empty'; }" ^
-  "for($i=0; $i -lt $symbols.Count; $i += $chunk){$end=[Math]::Min($i + $chunk - 1, $symbols.Count - 1); ($symbols[$i..$end] -join ',')} | Set-Content -Encoding ASCII '%GROUP_FILE%'"
+  "$groups=New-Object System.Collections.Generic.List[string];" ^
+  "for($i=0; $i -lt $symbols.Count; $i += $chunk){$end=[Math]::Min($i + $chunk - 1, $symbols.Count - 1); $groups.Add((@($symbols[$i..$end]) -join ',')); }" ^
+  "$groups | Set-Content -Encoding ASCII '%GROUP_FILE%'"
 if errorlevel 1 (
   call :log [train-batch] Failed to build symbol groups from ALL_SYMBOLS.
   set "EXIT_CODE=1"
