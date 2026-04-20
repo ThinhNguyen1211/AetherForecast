@@ -4,17 +4,30 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%..\..") do set "ROOT=%%~fI"
 set "BACKEND_DIR=%SCRIPT_DIR%"
+cd /d "%ROOT%"
 
-set "PY=%ROOT%\train-gpu\Scripts\python.exe"
-if not exist "%PY%" set "PY=%ROOT%\.venv\Scripts\python.exe"
+set "PY_CANDIDATE_VENV=%ROOT%\.venv\Scripts\python.exe"
+set "PY_CANDIDATE_TRAIN_GPU=%ROOT%\train-gpu\Scripts\python.exe"
+set "PY="
 
-if not exist "%PY%" (
-  echo [train-batch] Python interpreter not found in train-gpu or .venv.
+call :select_python
+if not defined PY (
+  echo [train-batch] No project Python found. Bootstrapping .venv automatically...
+  call :bootstrap_python
+  if errorlevel 1 exit /b 1
+  call :select_python
+)
+
+if not defined PY (
+  echo [train-batch] Python interpreter not found after bootstrap.
   echo [train-batch] Expected one of:
-  echo   %ROOT%\train-gpu\Scripts\python.exe
   echo   %ROOT%\.venv\Scripts\python.exe
+  echo   %ROOT%\train-gpu\Scripts\python.exe
   exit /b 1
 )
+
+call :ensure_runtime_deps
+if errorlevel 1 exit /b 1
 
 if /I "%DATA_BUCKET%"=="dummy-bucket" set "DATA_BUCKET="
 if /I "%DATA_S3_BUCKET%"=="dummy-bucket" set "DATA_S3_BUCKET="
@@ -64,7 +77,17 @@ if not defined RUN_ID set "RUN_ID=manual"
 
 set "SUMMARY_LOG=%LOG_DIR%\train-batch-%RUN_ID%.log"
 set "GROUP_FILE=%LOG_DIR%\train-batch-groups-%RUN_ID%.txt"
+set "LOCK_FILE=%LOG_DIR%\train-batch.lock"
 set "EXIT_CODE=0"
+
+if exist "%LOCK_FILE%" (
+  echo [train-batch] Another train-batch run appears to be active.
+  echo [train-batch] Lock file: %LOCK_FILE%
+  echo [train-batch] If no train-local.py process is running, delete this lock file and run again.
+  exit /b 1
+)
+
+> "%LOCK_FILE%" echo started=%DATE% %TIME%
 
 call :log [train-batch] ============================================================
 call :log [train-batch] Python=%PY%
@@ -156,6 +179,9 @@ if !GROUP_INDEX! EQU 0 (
 call :log [train-batch] All groups completed successfully.
 
 :finish
+if exist "%GROUP_FILE%" del /q "%GROUP_FILE%" >nul 2>&1
+if exist "%LOCK_FILE%" del /q "%LOCK_FILE%" >nul 2>&1
+
 if "%EXIT_CODE%"=="0" (
   call :log [train-batch] Run finished at %DATE% %TIME%
 ) else (
@@ -168,4 +194,47 @@ exit /b %EXIT_CODE%
 :log
 echo %*
 >> "%SUMMARY_LOG%" echo %*
+exit /b 0
+
+:select_python
+set "PY="
+if exist "%PY_CANDIDATE_VENV%" set "PY=%PY_CANDIDATE_VENV%"
+if not defined PY if exist "%PY_CANDIDATE_TRAIN_GPU%" set "PY=%PY_CANDIDATE_TRAIN_GPU%"
+exit /b 0
+
+:bootstrap_python
+set "SYS_PY="
+where py >nul 2>&1
+if not errorlevel 1 set "SYS_PY=py -3"
+if not defined SYS_PY (
+  where python >nul 2>&1
+  if not errorlevel 1 set "SYS_PY=python"
+)
+
+if not defined SYS_PY (
+  echo [train-batch] Could not find system Python (py or python) to create .venv.
+  exit /b 1
+)
+
+if not exist "%PY_CANDIDATE_VENV%" (
+  %SYS_PY% -m venv "%ROOT%\.venv"
+  if errorlevel 1 (
+    echo [train-batch] Failed to create virtual environment at %ROOT%\.venv
+    exit /b 1
+  )
+)
+
+"%PY_CANDIDATE_VENV%" -m pip install --disable-pip-version-check --upgrade pip >nul 2>&1
+exit /b 0
+
+:ensure_runtime_deps
+"%PY%" -c "import boto3,pandas,numpy,torch,transformers" >nul 2>&1
+if errorlevel 1 (
+  echo [train-batch] Installing Python dependencies from requirements.txt ...
+  "%PY%" -m pip install --disable-pip-version-check -r "%BACKEND_DIR%requirements.txt"
+  if errorlevel 1 (
+    echo [train-batch] Failed to install Python dependencies.
+    exit /b 1
+  )
+)
 exit /b 0
