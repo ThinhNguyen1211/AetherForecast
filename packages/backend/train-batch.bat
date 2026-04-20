@@ -8,7 +8,12 @@ cd /d "%ROOT%"
 
 set "PY_CANDIDATE_VENV=%ROOT%\.venv\Scripts\python.exe"
 set "PY_CANDIDATE_TRAIN_GPU=%ROOT%\train-gpu\Scripts\python.exe"
+set "PY_CANDIDATE_TRAIN_GPU_BACKEND=%ROOT%\train-gpu\backend-code\.venv\Scripts\python.exe"
 set "PY="
+set "PY_TORCH_CUDA=0"
+set "GPU_VISIBLE=0"
+
+call :detect_gpu
 
 call :select_python
 if not defined PY (
@@ -28,6 +33,8 @@ if not defined PY (
 
 call :ensure_runtime_deps
 if errorlevel 1 exit /b 1
+
+call :probe_torch_cuda "%PY%"
 
 if /I "%DATA_BUCKET%"=="dummy-bucket" set "DATA_BUCKET="
 if /I "%DATA_S3_BUCKET%"=="dummy-bucket" set "DATA_S3_BUCKET="
@@ -62,6 +69,7 @@ if not defined ENABLE_EXTERNAL_FETCH set "ENABLE_EXTERNAL_FETCH=1"
 if not defined STRICT_EXTERNAL_DATA set "STRICT_EXTERNAL_DATA=0"
 if not defined PREDICT_VARIANCE_SCALE set "PREDICT_VARIANCE_SCALE=1.18"
 if not defined PREDICT_DIFFUSION_STEPS set "PREDICT_DIFFUSION_STEPS=3"
+if not defined REQUIRE_CUDA set "REQUIRE_CUDA=0"
 
 if not defined BASE_MODEL_ID set "BASE_MODEL_ID=amazon/chronos-2"
 if not defined BASE_MODEL_FALLBACK_ID set "BASE_MODEL_FALLBACK_ID=amazon/chronos-t5-large"
@@ -81,16 +89,33 @@ set "LOCK_FILE=%LOG_DIR%\train-batch.lock"
 set "EXIT_CODE=0"
 
 if exist "%LOCK_FILE%" (
-  echo [train-batch] Another train-batch run appears to be active.
-  echo [train-batch] Lock file: %LOCK_FILE%
-  echo [train-batch] If no train-local.py process is running, delete this lock file and run again.
-  exit /b 1
+  call :has_active_train_local
+  if "!HAS_ACTIVE_TRAIN_LOCAL!"=="1" (
+    echo [train-batch] Another train-batch run is still active.
+    echo [train-batch] Lock file: %LOCK_FILE%
+    exit /b 1
+  )
+  echo [train-batch] Stale lock detected. Removing %LOCK_FILE% ...
+  del /q "%LOCK_FILE%" >nul 2>&1
 )
 
 > "%LOCK_FILE%" echo started=%DATE% %TIME%
 
+if "%REQUIRE_CUDA%"=="1" if not "%PY_TORCH_CUDA%"=="1" (
+  call :log [train-batch] REQUIRE_CUDA=1 but selected Python has no CUDA-enabled torch.
+  call :log [train-batch] Python=%PY%
+  set "EXIT_CODE=1"
+  goto :finish
+)
+
 call :log [train-batch] ============================================================
 call :log [train-batch] Python=%PY%
+call :log [train-batch] GPU_VISIBLE=%GPU_VISIBLE% TORCH_CUDA=%PY_TORCH_CUDA%
+if "%PY_TORCH_CUDA%"=="1" (
+  call :log [train-batch] Runtime mode: GPU (CUDA)
+) else (
+  call :log [train-batch] Runtime mode: CPU (CUDA not available in selected Python)
+)
 call :log [train-batch] AWS_REGION=%AWS_REGION%
 call :log [train-batch] DATA_BUCKET=%DATA_BUCKET%
 call :log [train-batch] MODEL_BUCKET=%MODEL_BUCKET%
@@ -198,8 +223,34 @@ exit /b 0
 
 :select_python
 set "PY="
-if exist "%PY_CANDIDATE_VENV%" set "PY=%PY_CANDIDATE_VENV%"
-if not defined PY if exist "%PY_CANDIDATE_TRAIN_GPU%" set "PY=%PY_CANDIDATE_TRAIN_GPU%"
+set "PY_FALLBACK="
+for %%P in ("%PY_CANDIDATE_TRAIN_GPU%" "%PY_CANDIDATE_TRAIN_GPU_BACKEND%" "%PY_CANDIDATE_VENV%") do (
+  if exist "%%~fP" (
+    if not defined PY_FALLBACK set "PY_FALLBACK=%%~fP"
+    call :probe_torch_cuda "%%~fP"
+    if "!PY_TORCH_CUDA!"=="1" (
+      set "PY=%%~fP"
+      goto :select_python_done
+    )
+  )
+)
+
+if not defined PY set "PY=%PY_FALLBACK%"
+:select_python_done
+exit /b 0
+
+:detect_gpu
+set "GPU_VISIBLE=0"
+where nvidia-smi >nul 2>&1
+if errorlevel 1 exit /b 0
+nvidia-smi -L >nul 2>&1
+if not errorlevel 1 set "GPU_VISIBLE=1"
+exit /b 0
+
+:probe_torch_cuda
+set "PY_TORCH_CUDA=0"
+for /f %%I in ('"%~1" -c "import torch; print(1 if torch.cuda.is_available() else 0)" 2^>nul') do set "PY_TORCH_CUDA=%%I"
+if not defined PY_TORCH_CUDA set "PY_TORCH_CUDA=0"
 exit /b 0
 
 :bootstrap_python
@@ -237,4 +288,10 @@ if errorlevel 1 (
     exit /b 1
   )
 )
+exit /b 0
+
+:has_active_train_local
+set "HAS_ACTIVE_TRAIN_LOCAL=0"
+for /f %%I in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-CimInstance Win32_Process ^| Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -like '*train-local.py*' }; if($p){'1'}else{'0'}"') do set "HAS_ACTIVE_TRAIN_LOCAL=%%I"
+if not defined HAS_ACTIVE_TRAIN_LOCAL set "HAS_ACTIVE_TRAIN_LOCAL=0"
 exit /b 0
