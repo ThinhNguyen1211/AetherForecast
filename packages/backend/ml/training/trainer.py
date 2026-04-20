@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import logging
 import os
 from pathlib import Path
 from typing import Any
 
 from datasets import DatasetDict
+import numpy as np
 from peft import LoraConfig, TaskType, get_peft_model
 import torch
 from transformers import (
@@ -38,6 +40,9 @@ class TrainingHyperParameters:
     lora_alpha: int
     lora_dropout: float
     max_length: int
+    predict_variance_scale: float = 1.18
+    predict_diffusion_steps: int = 3
+    postprocess_calibration_samples: int = 2000
 
 
 @dataclass
@@ -258,6 +263,89 @@ def _tokenize_causal(dataset_dict: DatasetDict, tokenizer, max_length: int) -> D
     )
 
 
+def _parse_target_series(target_text: str) -> np.ndarray:
+    values = []
+    for token in target_text.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            values.append(float(token))
+        except ValueError:
+            continue
+    if not values:
+        return np.asarray([], dtype=np.float64)
+    return np.asarray(values, dtype=np.float64)
+
+
+def _estimate_postprocess_calibration(
+    dataset_dict: DatasetDict,
+    hyper_params: TrainingHyperParameters,
+) -> dict[str, float | int]:
+    train_split = dataset_dict["train"]
+    if len(train_split) == 0:
+        return {
+            "variance_scale": float(hyper_params.predict_variance_scale),
+            "diffusion_steps": int(hyper_params.predict_diffusion_steps),
+            "target_return_volatility": 0.0,
+        }
+
+    sample_limit = max(200, int(hyper_params.postprocess_calibration_samples))
+    stride = max(1, len(train_split) // sample_limit)
+
+    volatilities: list[float] = []
+    for index in range(0, len(train_split), stride):
+        target_text = str(train_split[index].get("target_text", ""))
+        target_values = _parse_target_series(target_text)
+        if target_values.size < 3:
+            continue
+
+        returns = np.diff(np.log(np.maximum(target_values, 1e-8)))
+        if returns.size < 2:
+            continue
+
+        volatility = float(np.std(returns))
+        if np.isfinite(volatility):
+            volatilities.append(volatility)
+
+        if len(volatilities) >= sample_limit:
+            break
+
+    if not volatilities:
+        return {
+            "variance_scale": float(hyper_params.predict_variance_scale),
+            "diffusion_steps": int(hyper_params.predict_diffusion_steps),
+            "target_return_volatility": 0.0,
+        }
+
+    median_vol = float(np.median(volatilities))
+    p80_vol = float(np.quantile(volatilities, 0.80))
+
+    vol_spread = max(0.0, p80_vol - median_vol)
+    calibrated_variance_scale = float(
+        np.clip(hyper_params.predict_variance_scale + vol_spread * 16.0, 1.02, 1.60)
+    )
+
+    diffusion_bias = int(round((0.015 - median_vol) * 120.0))
+    calibrated_diffusion_steps = int(
+        np.clip(hyper_params.predict_diffusion_steps + diffusion_bias, 2, 6)
+    )
+
+    return {
+        "variance_scale": calibrated_variance_scale,
+        "diffusion_steps": calibrated_diffusion_steps,
+        "target_return_volatility": median_vol,
+    }
+
+
+def _write_postprocess_calibration(output_dir: Path, calibration: dict[str, float | int]) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    calibration_path = output_dir / "postprocess-calibration.json"
+    with calibration_path.open("w", encoding="utf-8") as file:
+        json.dump(calibration, file, indent=2, sort_keys=True)
+    logger.info("Saved postprocess calibration metadata to %s", calibration_path)
+
+
 def build_trainer(
     model_id_or_path: str,
     cache_dir: str,
@@ -301,6 +389,18 @@ def build_trainer(
     output_dir = Path(hyper_params.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    calibration = _estimate_postprocess_calibration(dataset_dict, hyper_params)
+    setattr(model.config, "aether_variance_scale", calibration["variance_scale"])
+    setattr(model.config, "aether_diffusion_steps", calibration["diffusion_steps"])
+    setattr(model.config, "aether_target_return_volatility", calibration["target_return_volatility"])
+    _write_postprocess_calibration(output_dir, calibration)
+    logger.info(
+        "Postprocess calibration: variance_scale=%.4f diffusion_steps=%s target_return_volatility=%.6f",
+        float(calibration["variance_scale"]),
+        int(calibration["diffusion_steps"]),
+        float(calibration["target_return_volatility"]),
+    )
+
     use_fp16 = torch.cuda.is_available()
 
     training_arguments = TrainingArguments(
@@ -309,20 +409,31 @@ def build_trainer(
         num_train_epochs=hyper_params.epochs,
         learning_rate=hyper_params.learning_rate,
         per_device_train_batch_size=hyper_params.batch_size,
-        per_device_eval_batch_size=max(1, hyper_params.batch_size),
+        per_device_eval_batch_size=max(1, min(2, hyper_params.batch_size)),
         gradient_accumulation_steps=hyper_params.gradient_accumulation_steps,
         warmup_ratio=hyper_params.warmup_ratio,
         weight_decay=hyper_params.weight_decay,
         logging_steps=hyper_params.logging_steps,
+        logging_first_step=True,
         save_steps=hyper_params.save_steps,
         eval_steps=hyper_params.eval_steps,
-        save_total_limit=3,
+        save_total_limit=2,
         evaluation_strategy="steps",
         save_strategy="steps",
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+        lr_scheduler_type="cosine",
+        optim="adamw_torch",
+        max_grad_norm=1.0,
+        group_by_length=True,
         report_to=[],
         bf16=False,
         fp16=use_fp16,
-        dataloader_num_workers=2,
+        dataloader_num_workers=1,
+        dataloader_pin_memory=use_fp16,
+        eval_accumulation_steps=8,
+        prediction_loss_only=True,
         gradient_checkpointing=True,
     )
 

@@ -12,6 +12,7 @@ import sys
 DEFAULT_SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,XAUUSD,BNBUSDT,PAXGUSDT"
 DEFAULT_PRIMARY_MODEL = "amazon/chronos-2"
 DEFAULT_FALLBACK_MODEL = "amazon/chronos-t5-large"
+DEFAULT_TIMEFRAME = "1h,4h,1d"
 REEXEC_GUARD_ENV = "AETHERFORECAST_TRAIN_REEXEC"
 
 logger = logging.getLogger("aetherforecast.local-train")
@@ -39,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbols", default=DEFAULT_SYMBOLS)
     parser.add_argument(
         "--timeframe",
-        default=os.getenv("TIMEFRAME", "1h"),
+        default=os.getenv("TIMEFRAME", DEFAULT_TIMEFRAME),
         help="Single timeframe (e.g. 1m) or comma list (e.g. 1m,5m,15m) or all",
     )
     parser.add_argument("--epochs", type=int, default=int(os.getenv("EPOCHS", "2")))
@@ -51,9 +52,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--learning-rate", type=float, default=float(os.getenv("LEARNING_RATE", "0.0002")))
     parser.add_argument("--max-rows-per-symbol", type=int, default=int(os.getenv("MAX_ROWS_PER_SYMBOL", "8000")))
-    parser.add_argument("--context-length", type=int, default=int(os.getenv("CONTEXT_LENGTH", "96")))
+    parser.add_argument("--context-length", type=int, default=int(os.getenv("CONTEXT_LENGTH", "1024")))
     parser.add_argument("--horizon", type=int, default=int(os.getenv("TRAINING_HORIZON", "7")))
-    parser.add_argument("--max-seq-length", type=int, default=int(os.getenv("MAX_SEQ_LENGTH", "384")))
+    parser.add_argument("--max-seq-length", type=int, default=int(os.getenv("MAX_SEQ_LENGTH", "1024")))
     parser.add_argument("--save-steps", type=int, default=int(os.getenv("SAVE_STEPS", "50")))
     parser.add_argument("--eval-steps", type=int, default=int(os.getenv("EVAL_STEPS", "50")))
     parser.add_argument("--logging-steps", type=int, default=int(os.getenv("LOGGING_STEPS", "5")))
@@ -61,6 +62,36 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lora-alpha", type=int, default=int(os.getenv("LORA_ALPHA", "32")))
     parser.add_argument("--lora-dropout", type=float, default=float(os.getenv("LORA_DROPOUT", "0.05")))
     parser.add_argument("--train-split-ratio", type=float, default=float(os.getenv("TRAIN_SPLIT_RATIO", "0.95")))
+    parser.add_argument(
+        "--walk-forward-windows",
+        type=int,
+        default=int(os.getenv("WALK_FORWARD_WINDOWS", "4")),
+        help="Number of rolling walk-forward windows for validation.",
+    )
+    parser.add_argument(
+        "--walk-forward-eval-size",
+        type=int,
+        default=int(os.getenv("WALK_FORWARD_EVAL_SIZE", "128")),
+        help="Validation span size per walk-forward window.",
+    )
+    parser.add_argument(
+        "--external-covariate-scale",
+        type=float,
+        default=float(os.getenv("EXTERNAL_COVARIATE_SCALE", "0.0018")),
+        help="How strongly external covariates perturb context series during training.",
+    )
+    parser.add_argument(
+        "--predict-variance-scale",
+        type=float,
+        default=float(os.getenv("PREDICT_VARIANCE_SCALE", "1.18")),
+        help="Base variance scaling factor written to postprocess calibration metadata.",
+    )
+    parser.add_argument(
+        "--predict-diffusion-steps",
+        type=int,
+        default=int(os.getenv("PREDICT_DIFFUSION_STEPS", "3")),
+        help="Base diffusion refinement steps written to postprocess calibration metadata.",
+    )
     parser.add_argument("--base-model-id", default=os.getenv("BASE_MODEL_ID", DEFAULT_PRIMARY_MODEL))
     parser.add_argument(
         "--base-model-fallback-id",
@@ -95,6 +126,32 @@ def build_parser() -> argparse.ArgumentParser:
         dest="local_files_only",
         action="store_false",
         help="Allow remote model/tokenizer downloads when cache misses occur.",
+    )
+    parser.add_argument(
+        "--enable-live-external-fetch",
+        dest="enable_live_external_fetch",
+        action="store_true",
+        default=_getenv_bool("ENABLE_EXTERNAL_FETCH", True),
+        help="Enable live external covariate fetches (Fear & Greed, macro, Binance derivatives).",
+    )
+    parser.add_argument(
+        "--disable-live-external-fetch",
+        dest="enable_live_external_fetch",
+        action="store_false",
+        help="Disable live external covariate fetches and rely on local data only.",
+    )
+    parser.add_argument(
+        "--strict-external-data",
+        dest="strict_external_data",
+        action="store_true",
+        default=_getenv_bool("STRICT_EXTERNAL_DATA", False),
+        help="Fail early when required external covariates are missing.",
+    )
+    parser.add_argument(
+        "--allow-external-fallback",
+        dest="strict_external_data",
+        action="store_false",
+        help="Allow training to continue even if some external covariates are unavailable.",
     )
     return parser
 
@@ -214,6 +271,13 @@ def export_training_env(args: argparse.Namespace) -> None:
         "LORA_ALPHA": str(args.lora_alpha),
         "LORA_DROPOUT": str(args.lora_dropout),
         "TRAIN_SPLIT_RATIO": str(args.train_split_ratio),
+        "WALK_FORWARD_WINDOWS": str(args.walk_forward_windows),
+        "WALK_FORWARD_EVAL_SIZE": str(args.walk_forward_eval_size),
+        "EXTERNAL_COVARIATE_SCALE": str(args.external_covariate_scale),
+        "ENABLE_EXTERNAL_FETCH": "1" if args.enable_live_external_fetch else "0",
+        "STRICT_EXTERNAL_DATA": "1" if args.strict_external_data else "0",
+        "PREDICT_VARIANCE_SCALE": str(args.predict_variance_scale),
+        "PREDICT_DIFFUSION_STEPS": str(args.predict_diffusion_steps),
         "BASE_MODEL_ID": args.base_model_id,
         "BASE_MODEL_FALLBACK_ID": args.base_model_fallback_id,
         "PARQUET_PREFIX": args.parquet_prefix,
@@ -233,6 +297,23 @@ def export_training_env(args: argparse.Namespace) -> None:
 
     logger.info("Local train configuration is ready")
     logger.info("Symbols: %s", args.symbols)
+    logger.info("Timeframes: %s", args.timeframe)
+    logger.info(
+        "Walk-forward: windows=%s eval_size=%s",
+        args.walk_forward_windows,
+        args.walk_forward_eval_size,
+    )
+    logger.info(
+        "External covariates: live_fetch=%s strict=%s scale=%.6f",
+        args.enable_live_external_fetch,
+        args.strict_external_data,
+        args.external_covariate_scale,
+    )
+    logger.info(
+        "Postprocess controls: variance_scale=%.4f diffusion_steps=%s",
+        args.predict_variance_scale,
+        args.predict_diffusion_steps,
+    )
     logger.info("Model primary=%s fallback=%s", args.base_model_id, args.base_model_fallback_id)
     logger.info("Output dir: %s", output_dir)
     logger.info("HF cache dir: %s", cache_dir)

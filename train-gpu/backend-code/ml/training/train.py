@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import importlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -50,6 +51,11 @@ class TrainRuntimeConfig:
     context_length: int
     max_rows_per_symbol: int
     train_split_ratio: float
+    walk_forward_windows: int
+    walk_forward_eval_size: int
+    external_covariate_scale: float
+    enable_external_fetch: bool
+    strict_external_data: bool
     epochs: int
     learning_rate: float
     batch_size: int
@@ -71,6 +77,8 @@ class TrainRuntimeConfig:
     hf_local_files_only: bool
     hf_force_download: bool
     chronos2_train_steps: int
+    predict_variance_scale: float
+    predict_diffusion_steps: int
 
 
 class InterruptAwareCallback(TrainerCallback):
@@ -110,14 +118,19 @@ def load_runtime_config() -> TrainRuntimeConfig:
         model_s3_uri=model_s3_uri,
         checkpoint_s3_uri=checkpoint_s3_uri,
         symbols=symbols,
-        timeframe=os.getenv("TIMEFRAME", "1h"),
+        timeframe=os.getenv("TIMEFRAME", "1h,4h,1d"),
         horizon=_getenv_int("TRAINING_HORIZON", 7),
-        context_length=_getenv_int("CONTEXT_LENGTH", 96),
+        context_length=_getenv_int("CONTEXT_LENGTH", 1024),
         max_rows_per_symbol=_getenv_int("MAX_ROWS_PER_SYMBOL", 20000),
         train_split_ratio=_getenv_float("TRAIN_SPLIT_RATIO", 0.95),
+        walk_forward_windows=_getenv_int("WALK_FORWARD_WINDOWS", 4),
+        walk_forward_eval_size=_getenv_int("WALK_FORWARD_EVAL_SIZE", 128),
+        external_covariate_scale=_getenv_float("EXTERNAL_COVARIATE_SCALE", 0.0018),
+        enable_external_fetch=_getenv_bool("ENABLE_EXTERNAL_FETCH", True),
+        strict_external_data=_getenv_bool("STRICT_EXTERNAL_DATA", False),
         epochs=_getenv_int("EPOCHS", 3),
         learning_rate=_getenv_float("LEARNING_RATE", 2e-4),
-        batch_size=_getenv_int("BATCH_SIZE", 4),
+        batch_size=_getenv_int("BATCH_SIZE", 2),
         gradient_accumulation_steps=_getenv_int("GRAD_ACCUM_STEPS", 8),
         warmup_ratio=_getenv_float("WARMUP_RATIO", 0.03),
         weight_decay=_getenv_float("WEIGHT_DECAY", 0.01),
@@ -127,7 +140,7 @@ def load_runtime_config() -> TrainRuntimeConfig:
         lora_r=_getenv_int("LORA_R", 16),
         lora_alpha=_getenv_int("LORA_ALPHA", 32),
         lora_dropout=_getenv_float("LORA_DROPOUT", 0.05),
-        max_length=_getenv_int("MAX_SEQ_LENGTH", 512),
+        max_length=_getenv_int("MAX_SEQ_LENGTH", 1024),
         inference_model_id=os.getenv("BASE_MODEL_ID", DEFAULT_CHRONOS_PRIMARY_MODEL_ID),
         inference_model_fallback_id=os.getenv(
             "BASE_MODEL_FALLBACK_ID",
@@ -139,6 +152,8 @@ def load_runtime_config() -> TrainRuntimeConfig:
         hf_local_files_only=_getenv_bool("HF_LOCAL_FILES_ONLY", False),
         hf_force_download=_getenv_bool("HF_FORCE_DOWNLOAD", False),
         chronos2_train_steps=_getenv_int("CHRONOS2_TRAIN_STEPS", 0),
+        predict_variance_scale=_getenv_float("PREDICT_VARIANCE_SCALE", 1.18),
+        predict_diffusion_steps=_getenv_int("PREDICT_DIFFUSION_STEPS", 3),
     )
 
 
@@ -152,12 +167,60 @@ def _is_probably_chronos2(model_id_or_path: str) -> bool:
     return "chronos-2" in (model_id_or_path or "").strip().lower()
 
 
+def _build_walk_forward_ranges(
+    total_points: int,
+    *,
+    context_length: int,
+    horizon: int,
+    train_split_ratio: float,
+    walk_forward_windows: int,
+    walk_forward_eval_size: int,
+) -> list[tuple[int, int, int]]:
+    start_index = context_length
+    upper_bound = total_points - horizon
+    if upper_bound <= start_index + 1:
+        return []
+
+    window_count = max(1, int(walk_forward_windows))
+    usable = upper_bound - start_index
+
+    if window_count <= 1 or usable < max(horizon * 2, 8):
+        split_index = int(total_points * train_split_ratio)
+        split_index = max(start_index + 1, min(split_index, upper_bound - 1))
+        eval_end = min(upper_bound, split_index + max(horizon * 2, 8))
+        return [(1, split_index, eval_end)]
+
+    step = max(horizon, usable // (window_count + 1))
+    eval_span = int(walk_forward_eval_size)
+    if eval_span <= 0:
+        eval_span = max(horizon * 2, step)
+
+    ranges: list[tuple[int, int, int]] = []
+    cutoff = start_index + step
+    for fold_id in range(1, window_count + 1):
+        train_end = min(cutoff, upper_bound - 1)
+        validation_end = min(upper_bound, train_end + eval_span)
+        if train_end > start_index and validation_end > train_end:
+            ranges.append((fold_id, train_end, validation_end))
+        cutoff += step
+
+    if not ranges:
+        split_index = int(total_points * train_split_ratio)
+        split_index = max(start_index + 1, min(split_index, upper_bound - 1))
+        eval_end = min(upper_bound, split_index + max(horizon * 2, 8))
+        ranges = [(1, split_index, eval_end)]
+
+    return ranges
+
+
 def _prepare_chronos2_inputs(
     market_dataframe,
     *,
     horizon: int,
     context_length: int,
     train_split_ratio: float,
+    walk_forward_windows: int,
+    walk_forward_eval_size: int,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
     train_inputs: list[np.ndarray] = []
     validation_inputs: list[np.ndarray] = []
@@ -165,24 +228,42 @@ def _prepare_chronos2_inputs(
     group_columns = ["symbol", "timeframe"] if "timeframe" in market_dataframe.columns else ["symbol"]
     minimum_required = max(horizon + context_length + 8, horizon * 4)
 
-    for _, group in market_dataframe.groupby(group_columns):
-        ordered = group.sort_values("timestamp")
-        closes = ordered["close"].to_numpy(dtype=np.float32)
+    for group_key, group in market_dataframe.groupby(group_columns):
+        ordered = group.sort_values("timestamp").reset_index(drop=True)
+        source_column = "close_adjusted" if "close_adjusted" in ordered.columns else "close"
+        closes = ordered[source_column].to_numpy(dtype=np.float32)
         if len(closes) < minimum_required:
             continue
 
-        split_index = int(len(closes) * train_split_ratio)
-        split_index = max(split_index, horizon + context_length)
-        split_index = min(split_index, len(closes) - horizon)
+        walk_forward_ranges = _build_walk_forward_ranges(
+            len(closes),
+            context_length=context_length,
+            horizon=horizon,
+            train_split_ratio=train_split_ratio,
+            walk_forward_windows=walk_forward_windows,
+            walk_forward_eval_size=walk_forward_eval_size,
+        )
+        if not walk_forward_ranges:
+            continue
 
-        train_series = closes[:split_index]
-        if len(train_series) >= minimum_required:
-            train_inputs.append(train_series)
+        for fold_id, train_end, validation_end in walk_forward_ranges:
+            train_series = closes[:train_end]
+            if len(train_series) >= minimum_required:
+                train_inputs.append(train_series)
 
-        validation_start = max(split_index - context_length, 0)
-        validation_series = closes[validation_start:]
-        if len(validation_series) >= minimum_required:
-            validation_inputs.append(validation_series)
+            validation_start = max(train_end - context_length, 0)
+            validation_stop = min(len(closes), validation_end + horizon)
+            validation_series = closes[validation_start:validation_stop]
+            if len(validation_series) >= minimum_required:
+                validation_inputs.append(validation_series)
+
+            logger.debug(
+                "Chronos walk-forward group=%s fold=%s train_end=%s validation_end=%s",
+                group_key,
+                fold_id,
+                train_end,
+                validation_end,
+            )
 
     if not train_inputs:
         raise ValueError(
@@ -198,9 +279,73 @@ def _resolve_chronos2_num_steps(config: TrainRuntimeConfig, train_inputs: list[n
         return config.chronos2_train_steps
 
     approx_windows = sum(max(1, len(series) - config.context_length - config.horizon + 1) for series in train_inputs)
-    denominator = max(config.batch_size * 64, 1)
+    context_penalty = max(1.0, config.context_length / 256.0)
+    denominator = max(int(config.batch_size * 64 * context_penalty), 1)
     steps_per_epoch = max(10, approx_windows // denominator)
-    return max(100, min(2000, steps_per_epoch * max(config.epochs, 1)))
+    return max(80, min(1800, steps_per_epoch * max(config.epochs, 1)))
+
+
+def _build_postprocess_calibration_payload(
+    train_inputs: list[np.ndarray],
+    config: TrainRuntimeConfig,
+) -> dict[str, float | int]:
+    volatilities: list[float] = []
+
+    for series in train_inputs:
+        sample = np.asarray(series, dtype=np.float64)
+        if sample.size < 8:
+            continue
+
+        tail = sample[-min(sample.size, 512) :]
+        returns = np.diff(np.log(np.maximum(tail, 1e-8)))
+        if returns.size < 4:
+            continue
+
+        vol = float(np.std(returns))
+        if np.isfinite(vol):
+            volatilities.append(vol)
+
+    if not volatilities:
+        return {
+            "variance_scale": float(config.predict_variance_scale),
+            "diffusion_steps": int(config.predict_diffusion_steps),
+            "target_return_volatility": 0.0,
+        }
+
+    median_vol = float(np.median(volatilities))
+    p80_vol = float(np.quantile(volatilities, 0.80))
+    vol_spread = max(0.0, p80_vol - median_vol)
+
+    variance_scale = float(np.clip(config.predict_variance_scale + vol_spread * 14.0, 1.02, 1.60))
+    diffusion_bias = int(round((0.015 - median_vol) * 120.0))
+    diffusion_steps = int(np.clip(config.predict_diffusion_steps + diffusion_bias, 2, 6))
+
+    return {
+        "variance_scale": variance_scale,
+        "diffusion_steps": diffusion_steps,
+        "target_return_volatility": median_vol,
+    }
+
+
+def _write_postprocess_calibration(
+    output_dir: Path,
+    train_inputs: list[np.ndarray],
+    config: TrainRuntimeConfig,
+) -> dict[str, float | int]:
+    payload = _build_postprocess_calibration_payload(train_inputs, config)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    calibration_path = output_dir / "postprocess-calibration.json"
+
+    with calibration_path.open("w", encoding="utf-8") as file:
+        json.dump(payload, file, indent=2, sort_keys=True)
+
+    logger.info(
+        "Postprocess calibration saved: variance_scale=%.4f diffusion_steps=%s target_return_volatility=%.6f",
+        float(payload["variance_scale"]),
+        int(payload["diffusion_steps"]),
+        float(payload["target_return_volatility"]),
+    )
+    return payload
 
 
 def _load_chronos2_pipeline(config: TrainRuntimeConfig) -> tuple[Any, str]:
@@ -268,6 +413,8 @@ def _train_with_chronos2_native(
         horizon=config.horizon,
         context_length=config.context_length,
         train_split_ratio=config.train_split_ratio,
+        walk_forward_windows=config.walk_forward_windows,
+        walk_forward_eval_size=config.walk_forward_eval_size,
     )
 
     pipeline, loaded_from = _load_chronos2_pipeline(config)
@@ -313,9 +460,9 @@ def _train_with_chronos2_native(
         context_length=config.context_length,
         learning_rate=config.learning_rate,
         num_steps=num_steps,
-        batch_size=max(1, config.batch_size),
+        batch_size=max(1, min(config.batch_size, 2)),
         output_dir=str(output_dir),
-        min_past=max(config.horizon, min(config.context_length, 128)),
+        min_past=max(config.horizon, min(config.context_length, 256)),
         finetuned_ckpt_name="final-model",
         callbacks=callbacks,
         remove_printer_callback=True,
@@ -328,6 +475,8 @@ def _train_with_chronos2_native(
         report_to="none",
     )
 
+    calibration = _write_postprocess_calibration(output_dir, train_inputs, config)
+
     if _INTERRUPTED:
         logger.warning("Chronos-2 training interrupted. Skipping model promotion.")
         raise SystemExit(143)
@@ -336,6 +485,10 @@ def _train_with_chronos2_native(
     final_local_dir.mkdir(parents=True, exist_ok=True)
     if not any(final_local_dir.iterdir()):
         pipeline.save_pretrained(str(final_local_dir))
+
+    calibration_path = final_local_dir / "postprocess-calibration.json"
+    with calibration_path.open("w", encoding="utf-8") as file:
+        json.dump(calibration, file, indent=2, sort_keys=True)
 
     timestamp, version_uri = _resolve_model_version_uri(config.model_s3_uri)
     logger.info("Uploading fine-tuned model version %s to %s", timestamp, version_uri)
@@ -355,7 +508,14 @@ def main() -> None:
     signal.signal(signal.SIGINT, _handle_interrupt)
 
     config = load_runtime_config()
-    logger.info("Training config loaded: symbols=%s horizon=%s", config.symbols, config.horizon)
+    logger.info(
+        "Training config loaded: symbols=%s timeframe=%s horizon=%s context=%s walk_forward_windows=%s",
+        config.symbols,
+        config.timeframe,
+        config.horizon,
+        config.context_length,
+        config.walk_forward_windows,
+    )
 
     dataset_config = TrainingDatasetConfig(
         data_bucket=config.data_bucket,
@@ -367,6 +527,11 @@ def main() -> None:
         train_split_ratio=config.train_split_ratio,
         aws_region=config.aws_region,
         aws_endpoint_url=config.aws_endpoint_url,
+        walk_forward_windows=config.walk_forward_windows,
+        walk_forward_eval_size=config.walk_forward_eval_size,
+        external_covariate_scale=config.external_covariate_scale,
+        enable_external_fetch=config.enable_external_fetch,
+        strict_external_data=config.strict_external_data,
     )
 
     checkpoint_manager = S3CheckpointManager(
@@ -411,6 +576,8 @@ def main() -> None:
         lora_alpha=config.lora_alpha,
         lora_dropout=config.lora_dropout,
         max_length=config.max_length,
+        predict_variance_scale=config.predict_variance_scale,
+        predict_diffusion_steps=config.predict_diffusion_steps,
     )
 
     trainer, model, tokenizer = build_trainer(
