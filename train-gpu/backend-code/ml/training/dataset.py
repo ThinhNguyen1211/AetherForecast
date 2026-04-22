@@ -551,6 +551,8 @@ def _merge_asof_feature(
 
     left["timestamp"] = pd.to_datetime(left["timestamp"], utc=True, errors="coerce")
     right["timestamp"] = pd.to_datetime(right["timestamp"], utc=True, errors="coerce")
+    left["timestamp"] = left["timestamp"].astype("datetime64[ns, UTC]")
+    right["timestamp"] = right["timestamp"].astype("datetime64[ns, UTC]")
 
     left = left.dropna(subset=["timestamp"])
     right = right.dropna(subset=["timestamp"])

@@ -35,6 +35,11 @@ call :ensure_runtime_deps
 if errorlevel 1 exit /b 1
 
 call :probe_torch_cuda "%PY%"
+if "%GPU_VISIBLE%"=="1" if not "%PY_TORCH_CUDA%"=="1" (
+  call :ensure_cuda_torch
+  if errorlevel 1 exit /b 1
+  call :probe_torch_cuda "%PY%"
+)
 
 if /I "%DATA_BUCKET%"=="dummy-bucket" set "DATA_BUCKET="
 if /I "%DATA_S3_BUCKET%"=="dummy-bucket" set "DATA_S3_BUCKET="
@@ -112,7 +117,7 @@ call :log [train-batch] ========================================================
 call :log [train-batch] Python=%PY%
 call :log [train-batch] GPU_VISIBLE=%GPU_VISIBLE% TORCH_CUDA=%PY_TORCH_CUDA%
 if "%PY_TORCH_CUDA%"=="1" (
-  call :log [train-batch] Runtime mode: GPU (CUDA)
+  call :log [train-batch] Runtime mode: GPU ^(CUDA^)
 ) else (
   call :log [train-batch] Runtime mode: CPU (CUDA not available in selected Python)
 )
@@ -249,7 +254,12 @@ exit /b 0
 
 :probe_torch_cuda
 set "PY_TORCH_CUDA=0"
-for /f %%I in ('"%~1" -c "import torch; print(1 if torch.cuda.is_available() else 0)" 2^>nul') do set "PY_TORCH_CUDA=%%I"
+set "CUDA_PROBE_FILE=%TEMP%\aetherforecast-cuda-%RANDOM%-%RANDOM%.txt"
+"%~1" -c "import torch,sys;sys.stdout.write(str(int(torch.cuda.is_available())))" > "%CUDA_PROBE_FILE%" 2>nul
+if exist "%CUDA_PROBE_FILE%" (
+  set /p PY_TORCH_CUDA=<"%CUDA_PROBE_FILE%"
+  del /q "%CUDA_PROBE_FILE%" >nul 2>&1
+)
 if not defined PY_TORCH_CUDA set "PY_TORCH_CUDA=0"
 exit /b 0
 
@@ -279,14 +289,44 @@ if not exist "%PY_CANDIDATE_VENV%" (
 exit /b 0
 
 :ensure_runtime_deps
-"%PY%" -c "import boto3,pandas,numpy,torch,transformers" >nul 2>&1
+"%PY%" -c "import boto3,pandas,numpy,torch,transformers,pydantic,pydantic_settings,chronos" >nul 2>&1
 if errorlevel 1 (
-  echo [train-batch] Installing Python dependencies from requirements.txt ...
-  "%PY%" -m pip install --disable-pip-version-check -r "%BACKEND_DIR%requirements.txt"
+  echo [train-batch] Installing core training dependencies ...
+  "%PY%" -m pip install --disable-pip-version-check ^
+    boto3==1.40.1 ^
+    botocore==1.40.1 ^
+    pandas==2.3.2 ^
+    numpy==2.2.6 ^
+    polars==1.33.0 ^
+    pyarrow==20.0.0 ^
+    datasets==4.0.0 ^
+    peft==0.17.1 ^
+    transformers==4.55.4 ^
+    accelerate==1.10.0 ^
+    safetensors==0.6.2 ^
+    sentencepiece==0.2.1 ^
+    scipy==1.16.1 ^
+    huggingface-hub==0.34.4 ^
+    pydantic==2.11.7 ^
+    pydantic-settings==2.11.0 ^
+    python-dotenv==1.2.1 ^
+    structlog==24.4.0 ^
+    requests==2.32.4 ^
+    chronos-forecasting==2.2.2
   if errorlevel 1 (
     echo [train-batch] Failed to install Python dependencies.
     exit /b 1
   )
+)
+exit /b 0
+
+:ensure_cuda_torch
+echo [train-batch] GPU detected but CUDA-enabled torch is unavailable in selected Python.
+echo [train-batch] Attempting to install CUDA torch wheels (cu128) ...
+"%PY%" -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cu128 torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0
+if errorlevel 1 (
+  echo [train-batch] Failed to install CUDA torch wheels.
+  if "%REQUIRE_CUDA%"=="1" exit /b 1
 )
 exit /b 0
 
