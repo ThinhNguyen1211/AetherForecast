@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     external_sentiment_refresh_seconds: int = 900
     external_sentiment_force_refresh_per_request: bool = True
     external_sentiment_require_live_sources: bool = True
+    external_covariates_enabled: bool = True
+    external_covariates_refresh_seconds: int = 900
+    external_covariate_scale: float = 0.0018
     sentiment_mode: str = "simple"
     sentiment_model_id: str = "ProsusAI/finbert"
     sentiment_cache_dir: str = "/tmp/aetherforecast-sentiment-cache"
@@ -51,10 +54,36 @@ class Settings(BaseSettings):
             "https://www.coindesk.com/arc/outboundfeeds/rss/",
             "https://cointelegraph.com/rss",
             "https://www.reuters.com/markets/currencies/rss",
+            "https://cryptoslate.com/feed/",
+            "https://news.bitcoin.com/feed/",
+            "https://coinjournal.net/feed/",
         ]
     )
     external_x_sentiment_endpoint: str | None = None
     external_geopolitical_sentiment_endpoint: str | None = None
+    external_news_api_endpoint: str | None = None
+    external_news_api_key: str | None = None
+    external_news_api_query: str = "bitcoin OR crypto OR ethereum OR ETF OR halving"
+    external_news_api_limit: int = 60
+    external_x_search_endpoint: str | None = None
+    external_x_search_bearer_token: str | None = None
+    external_x_search_query: str = "bitcoin OR crypto OR ethereum OR ETF OR halving OR elon OR trump"
+    external_x_search_limit: int = 60
+    external_event_keywords: Annotated[List[str], NoDecode] = Field(
+        default_factory=lambda: [
+            "elon",
+            "trump",
+            "halving",
+            "etf",
+            "sec",
+            "fed",
+            "rate cut",
+            "rate hike",
+            "cpi",
+            "inflation",
+            "blackrock",
+        ]
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -80,6 +109,15 @@ class Settings(BaseSettings):
             return [item.strip() for item in value if isinstance(item, str) and item.strip()]
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
+        return []
+
+    @field_validator("external_event_keywords", mode="before")
+    @classmethod
+    def parse_event_keywords(cls, value: str | list[str]) -> list[str]:
+        if isinstance(value, list):
+            return [item.strip().lower() for item in value if isinstance(item, str) and item.strip()]
+        if isinstance(value, str):
+            return [item.strip().lower() for item in value.split(",") if item.strip()]
         return []
 
     @property

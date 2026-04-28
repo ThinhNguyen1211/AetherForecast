@@ -100,6 +100,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--parquet-prefix", default=os.getenv("PARQUET_PREFIX", "market/klines"))
     parser.add_argument("--output-dir", default=os.getenv("TRAIN_OUTPUT_DIR", "./artifacts/local-training"))
     parser.add_argument("--hf-cache-dir", default=os.getenv("HF_CACHE_DIR", "./artifacts/hf-cache"))
+    parser.add_argument(
+        "--max-parquet-files-per-symbol",
+        type=int,
+        default=int(os.getenv("MAX_PARQUET_FILES_PER_SYMBOL", "320")),
+        help="Maximum number of parquet files to read per symbol.",
+    )
 
     parser.add_argument(
         "--force-model-redownload",
@@ -289,6 +295,7 @@ def export_training_env(args: argparse.Namespace) -> None:
         "HF_FORCE_DOWNLOAD": "1" if args.force_model_redownload else "0",
         "TOKENIZERS_PARALLELISM": "false",
         "TRANSFORMERS_VERBOSITY": "info",
+        "MAX_PARQUET_FILES_PER_SYMBOL": str(args.max_parquet_files_per_symbol),
         "LOG_LEVEL": os.getenv("LOG_LEVEL", "INFO"),
     }
 
@@ -303,6 +310,13 @@ def export_training_env(args: argparse.Namespace) -> None:
         args.walk_forward_windows,
         args.walk_forward_eval_size,
     )
+    logger.info(
+        "Trainer steps: save_steps=%s eval_steps=%s logging_steps=%s",
+        args.save_steps,
+        args.eval_steps,
+        args.logging_steps,
+    )
+    logger.info("Train split ratio: %.3f", args.train_split_ratio)
     logger.info(
         "External covariates: live_fetch=%s strict=%s scale=%.6f",
         args.enable_live_external_fetch,
@@ -328,6 +342,18 @@ def main() -> int:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
     parser = build_parser()
     args = parser.parse_args()
+
+    # Prominent GPU diagnostics at startup
+    try:
+        import torch as _torch
+        if _torch.cuda.is_available():
+            gpu_name = _torch.cuda.get_device_name(0)
+            gpu_mem = _torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            logger.info("========== GPU DETECTED: %s (%.2f GiB VRAM) ==========", gpu_name, gpu_mem)
+        else:
+            logger.warning("========== NO CUDA GPU AVAILABLE - Training will run on CPU ==========")
+    except ImportError:
+        logger.warning("========== torch not yet imported - GPU info unavailable ==========")
 
     if not args.data_bucket.strip():
         parser.error("--data-bucket is required (or DATA_S3_BUCKET/DATA_BUCKET env)")

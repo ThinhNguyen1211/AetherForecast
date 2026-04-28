@@ -278,8 +278,17 @@ class DataFetchService:
             external_enabled=get_settings().external_sentiment_enabled,
             external_refresh_seconds=get_settings().external_sentiment_refresh_seconds,
             news_rss_urls=get_settings().external_sentiment_news_rss_urls,
+            news_api_endpoint=get_settings().external_news_api_endpoint,
+            news_api_key=get_settings().external_news_api_key,
+            news_api_query=get_settings().external_news_api_query,
+            news_api_max_items=get_settings().external_news_api_limit,
             x_sentiment_endpoint=get_settings().external_x_sentiment_endpoint,
+            x_search_endpoint=get_settings().external_x_search_endpoint,
+            x_search_bearer_token=get_settings().external_x_search_bearer_token,
+            x_search_query=get_settings().external_x_search_query,
+            x_search_max_items=get_settings().external_x_search_limit,
             geopolitical_sentiment_endpoint=get_settings().external_geopolitical_sentiment_endpoint,
+            event_keywords=get_settings().external_event_keywords,
         )
         self._semaphore = asyncio.Semaphore(max(1, config.fetch_concurrency))
 

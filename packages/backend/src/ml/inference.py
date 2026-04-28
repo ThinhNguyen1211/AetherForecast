@@ -12,6 +12,7 @@ import pandas as pd
 import torch
 
 from src.core.config import get_settings
+from src.data.external_covariates import build_external_covariate_signal
 from src.data.sentiment import SentimentScorer
 from src.ml.model_loader import LoadedForecastModel, get_loaded_forecasting_model
 from src.ml.schemas import (
@@ -42,20 +43,33 @@ class ForecastInferenceService:
             external_enabled=self.settings.external_sentiment_enabled,
             external_refresh_seconds=self.settings.external_sentiment_refresh_seconds,
             news_rss_urls=self.settings.external_sentiment_news_rss_urls,
+            news_api_endpoint=self.settings.external_news_api_endpoint,
+            news_api_key=self.settings.external_news_api_key,
+            news_api_query=self.settings.external_news_api_query,
+            news_api_max_items=self.settings.external_news_api_limit,
             x_sentiment_endpoint=self.settings.external_x_sentiment_endpoint,
+            x_search_endpoint=self.settings.external_x_search_endpoint,
+            x_search_bearer_token=self.settings.external_x_search_bearer_token,
+            x_search_query=self.settings.external_x_search_query,
+            x_search_max_items=self.settings.external_x_search_limit,
             geopolitical_sentiment_endpoint=self.settings.external_geopolitical_sentiment_endpoint,
+            event_keywords=self.settings.external_event_keywords,
         )
 
     def _load_model(self) -> LoadedForecastModel:
+        model_s3_uri = self.settings.model_s3_uri
+        if not model_s3_uri.startswith("s3://"):
+            raise RuntimeError("MODEL_S3_URI must be an s3:// URI to resolve manifest/latest.json")
+
         return get_loaded_forecasting_model(
-            model_s3_uri=self.settings.model_s3_uri,
+            model_s3_uri=model_s3_uri,
             fallback_model_id=self.settings.hf_model_fallback_id,
             tokenizer_fallback_id=self.settings.hf_tokenizer_fallback_id,
             model_cache_dir=self.settings.model_cache_dir,
             aws_region=self.settings.aws_region,
             endpoint_url=self.settings.aws_endpoint_url,
             torch_dtype=self.settings.model_torch_dtype,
-            require_s3_model=self.settings.require_s3_model,
+            require_s3_model=True,
         )
 
     def _apply_sentiment(self, forecast: np.ndarray, sentiment_score: float | None) -> np.ndarray:
@@ -317,6 +331,8 @@ class ForecastInferenceService:
         request: PredictRequest,
         sentiment_score: float | None = None,
         external_sentiment_score: float | None = None,
+        external_covariate_signal: np.ndarray | None = None,
+        external_covariate_scale: float | None = None,
     ) -> dict[str, Any]:
         opens = np.asarray([float(item.open) for item in request.latest_candles], dtype=np.float64)
         highs = np.asarray([float(item.high) for item in request.latest_candles], dtype=np.float64)
@@ -400,9 +416,19 @@ class ForecastInferenceService:
             np.tanh(max(-1.0, min(1.0, float(external_sentiment_score or 0.0))) * 1.35) * 0.010
         )
 
+        covariate_scale = float(external_covariate_scale or 0.0)
+        covariate_signal = external_covariate_signal
+        if covariate_signal is None or covariate_signal.size == 0:
+            covariate_signal = np.zeros_like(closes, dtype=np.float64)
+
         for index, close in enumerate(closes):
             pattern_feature = float(pattern_signal[index]) if index < pattern_signal.size else 0.0
             pattern_impulse = pattern_feature * (1.0 + abs(pattern_feature) * 0.85)
+            covariate_adjustment = 0.0
+            if covariate_scale > 0.0 and index < covariate_signal.size:
+                covariate_adjustment = (
+                    math.exp(np.clip(float(covariate_signal[index]), -3.0, 3.0) * covariate_scale) - 1.0
+                )
             adjustment = (
                 np.tanh(volume_z[index]) * 0.006
                 + np.tanh(momentum_3[index] * 52.0) * 0.016
@@ -419,6 +445,7 @@ class ForecastInferenceService:
                 + pattern_impulse * 0.035
                 + sentiment_feature
                 + external_direction_boost
+                + covariate_adjustment
             )
             adjustment = float(max(-0.18, min(0.18, adjustment)))
             context.append(float(close * (1.0 + adjustment)))
@@ -431,6 +458,7 @@ class ForecastInferenceService:
             "pattern_signal": pattern_signal,
             "pattern_signals": pattern_signals,
             "volatility": volatility,
+            "covariate_signal": covariate_signal,
         }
 
     def _estimate_sentiment_score(
@@ -478,13 +506,15 @@ class ForecastInferenceService:
         max_attempts: int = 3,
     ) -> tuple[float, str, float, str]:
         last_error: RuntimeError | None = None
+        force_refresh = bool(self.settings.external_sentiment_force_refresh_per_request)
+        require_external = bool(self.settings.external_sentiment_require_live_sources)
 
         for attempt in range(1, max_attempts + 1):
             try:
                 return self._estimate_sentiment_score(
                     request,
-                    force_external_refresh=True,
-                    require_external=True,
+                    force_external_refresh=force_refresh,
+                    require_external=require_external,
                 )
             except RuntimeError as sentiment_error:
                 last_error = sentiment_error
@@ -920,15 +950,47 @@ class ForecastInferenceService:
             self._estimate_external_sentiment_with_retries(request)
         )
 
+        sentiment_snapshot = self.sentiment_scorer.get_external_feature_snapshot(
+            request.symbol.upper(),
+            force_external_refresh=False,
+        )
+        try:
+            covariate_signal, covariate_latest = build_external_covariate_signal(
+                candles=request.latest_candles,
+                symbol=request.symbol,
+                timeframe=request.timeframe,
+                sentiment_snapshot={
+                    "fear_greed_index": sentiment_snapshot.fear_greed_index,
+                    "crypto_news_sentiment": sentiment_snapshot.crypto_news_sentiment,
+                    "x_sentiment_score": sentiment_snapshot.x_sentiment_score,
+                    "event_impact_score": sentiment_snapshot.event_impact_score,
+                },
+                settings=self.settings,
+            )
+        except Exception as exc:
+            logger.warning("External covariate build failed: %s", exc)
+            covariate_signal = np.asarray([], dtype=np.float64)
+            covariate_latest = {}
+
         feature_bundle = self._build_context_series(
             request,
             sentiment_score=sentiment_score,
             external_sentiment_score=external_sentiment_score,
+            external_covariate_signal=covariate_signal,
+            external_covariate_scale=self.settings.external_covariate_scale,
         )
+        feature_bundle["external_covariates"] = covariate_latest
         context_series = feature_bundle["context"]
 
         try:
             loaded_model = self._load_model()
+            logger.info(
+                "Model loaded for prediction: name=%s version=%s source=%s effective=%s",
+                loaded_model.model_name,
+                loaded_model.model_version,
+                loaded_model.requested_source,
+                loaded_model.effective_source,
+            )
             quantiles = sorted({float(max(0.0, min(1.0, value))) for value in request.quantiles})
             if 0.5 not in quantiles:
                 quantiles.append(0.5)
@@ -978,6 +1040,19 @@ class ForecastInferenceService:
 
             model_name = loaded_model.model_name
             model_version = loaded_model.model_version
+
+            # Log feature completeness
+            non_zero_covariates = sum(1 for v in covariate_latest.values() if v != 0.0) if covariate_latest else 0
+            total_covariates = len(covariate_latest) if covariate_latest else 0
+            logger.info(
+                "Feature completeness for %s: context_len=%d patterns=%d vol_windows=%d covariates=%d/%d",
+                request.symbol.upper(),
+                len(context_series),
+                len(feature_bundle.get("pattern_signals", {})),
+                len(feature_bundle.get("volatility", {})),
+                non_zero_covariates,
+                total_covariates,
+            )
         except Exception as exc:
             logger.exception("Chronos inference failed for model_s3_uri=%s", self.settings.model_s3_uri)
             raise RuntimeError(f"Chronos model load/inference failed: {exc}") from exc
@@ -1029,12 +1104,32 @@ class ForecastInferenceService:
             volatility=feature_bundle.get("volatility", {}),
         )
 
+        covariate_latest = feature_bundle.get("external_covariates", {}) or {}
+        covariate_detail = ""
+        if covariate_latest:
+            covariate_detail = (
+                " covariates="
+                f"fng={covariate_latest.get('fear_greed_index', 0.0):.1f} "
+                f"news={covariate_latest.get('crypto_news_sentiment', 0.0):.3f} "
+                f"x={covariate_latest.get('x_sentiment_score', 0.0):.3f} "
+                f"funding={covariate_latest.get('funding_rate', 0.0):.5f} "
+                f"oi={covariate_latest.get('open_interest', 0.0):.2f} "
+                f"ls={covariate_latest.get('long_short_ratio', 0.0):.3f} "
+                f"top_ls={covariate_latest.get('top_trader_long_short_ratio', 0.0):.3f} "
+                f"taker={covariate_latest.get('taker_buy_sell_ratio', 0.0):.3f} "
+                f"btc_dom={covariate_latest.get('btc_dominance', 0.0):.2f} "
+                f"dxy={covariate_latest.get('macro_dxy', 0.0):.2f} "
+                f"us10y={covariate_latest.get('macro_us10y', 0.0):.2f} "
+                f"event={covariate_latest.get('event_impact_score', 0.0):.3f}"
+            )
+
         explanation = (
             "Forecast blends Chronos inference with live candlestick patterns, "
-            "multi-window realized volatility, and external sentiment. "
+            "multi-window realized volatility, and external covariates. "
             f"Horizon={horizon}, {forecast_detail}, volatility={volatility:.6f}, "
             f"sentiment={sentiment_score:.3f} ({sentiment_source}), "
             f"external={external_sentiment_score:.3f} ({external_sentiment_source})."
+            f"{covariate_detail}"
         )
 
         return PredictResponse(

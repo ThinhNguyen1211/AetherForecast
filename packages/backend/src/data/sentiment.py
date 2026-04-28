@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
 import math
@@ -49,10 +51,71 @@ _DEFAULT_GEOPOLITICAL_RSS_URLS = [
     "https://feeds.bbci.co.uk/news/world/rss.xml",
 ]
 
+_DEFAULT_CRYPTO_NEWS_RSS_URLS = [
+    "https://cointelegraph.com/rss",
+    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+]
+
 _DEFAULT_X_RSS_SOURCES = [
     "https://nitter.net/search/rss?f=tweets&q={query}",
     "https://nitter.poast.org/search/rss?f=tweets&q={query}",
 ]
+
+_DEFAULT_EVENT_KEYWORDS = [
+    "elon",
+    "trump",
+    "halving",
+    "etf",
+    "sec",
+    "fed",
+    "rate cut",
+    "rate hike",
+    "cpi",
+    "inflation",
+    "blackrock",
+    "whale",
+    "regulation",
+    "crash",
+    "pump",
+    "dump",
+    "hack",
+    "exploit",
+    "defi",
+    "stablecoin",
+    "cbdc",
+    "binance",
+    "coinbase",
+    "grayscale",
+    "microstrategy",
+]
+
+_DEFAULT_X_TOPICS = [
+    "bitcoin",
+    "crypto market",
+    "ethereum",
+    "solana",
+    "etf",
+    "halving",
+    "elon",
+    "trump",
+    "binance",
+    "whale",
+    "regulation",
+    "trump crypto",
+    "stablecoin",
+    "tether",
+]
+
+
+@dataclass(frozen=True)
+class ExternalSentimentSnapshot:
+    score: float
+    source: str
+    fear_greed_index: float
+    crypto_news_sentiment: float
+    x_sentiment_score: float
+    geopolitical_sentiment: float
+    event_impact_score: float
 
 
 class SentimentScorer:
@@ -64,8 +127,17 @@ class SentimentScorer:
         external_enabled: bool = True,
         external_refresh_seconds: int = 900,
         news_rss_urls: list[str] | None = None,
+        news_api_endpoint: str | None = None,
+        news_api_key: str | None = None,
+        news_api_query: str | None = None,
+        news_api_max_items: int = 60,
         x_sentiment_endpoint: str | None = None,
+        x_search_endpoint: str | None = None,
+        x_search_bearer_token: str | None = None,
+        x_search_query: str | None = None,
+        x_search_max_items: int = 60,
         geopolitical_sentiment_endpoint: str | None = None,
+        event_keywords: list[str] | None = None,
     ) -> None:
         self.mode = mode.lower().strip()
         self.model_id = model_id
@@ -76,9 +148,18 @@ class SentimentScorer:
         self.external_enabled = external_enabled
         self.external_refresh_seconds = max(60, int(external_refresh_seconds))
         self.news_rss_urls = news_rss_urls or []
+        self.news_api_endpoint = news_api_endpoint
+        self.news_api_key = news_api_key
+        self.news_api_query = (news_api_query or "").strip()
+        self.news_api_max_items = max(10, int(news_api_max_items))
         self.x_sentiment_endpoint = x_sentiment_endpoint
+        self.x_search_endpoint = x_search_endpoint
+        self.x_search_bearer_token = x_search_bearer_token
+        self.x_search_query = (x_search_query or "").strip()
+        self.x_search_max_items = max(10, int(x_search_max_items))
         self.geopolitical_sentiment_endpoint = geopolitical_sentiment_endpoint
-        self._external_cache: dict[str, tuple[float, str, datetime]] = {}
+        self.event_keywords = [item.strip().lower() for item in (event_keywords or _DEFAULT_EVENT_KEYWORDS) if item]
+        self._external_cache: dict[str, tuple[ExternalSentimentSnapshot, datetime]] = {}
         self._external_cache_lock = threading.Lock()
 
         if self.mode == "hf" and pipeline is None:
@@ -157,7 +238,7 @@ class SentimentScorer:
 
         return None
 
-    def _fetch_fear_greed_score(self) -> float | None:
+    def _fetch_fear_greed_index(self) -> float | None:
         url = "https://api.alternative.me/fng/?limit=1"
         try:
             with httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=True) as client:
@@ -170,11 +251,123 @@ class SentimentScorer:
                 return None
 
             value = float(values[0].get("value", 50.0))
-            normalized = (value - 50.0) / 50.0
-            return max(-1.0, min(1.0, normalized))
+            return max(0.0, min(100.0, value))
         except Exception as exc:
             logger.warning("Fear/Greed fetch failed: %s", exc)
             return None
+
+    def _extract_headlines_from_payload(self, payload: object, max_items: int) -> list[str]:
+        items: list[object] = []
+
+        if isinstance(payload, dict):
+            for key in ("data", "results", "articles", "posts"):
+                candidate = payload.get(key)
+                if isinstance(candidate, list):
+                    items = candidate
+                    break
+        elif isinstance(payload, list):
+            items = payload
+
+        headlines: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for key in ("title", "headline", "text", "summary", "description"):
+                text = item.get(key)
+                if text:
+                    headlines.append(str(text))
+                    break
+            if len(headlines) >= max_items:
+                break
+
+        return headlines
+
+    def _fetch_news_api_headlines(self, symbol: str, max_items: int) -> list[str]:
+        if not self.news_api_endpoint:
+            return []
+
+        query = self.news_api_query or symbol
+        params: dict[str, str | int] = {}
+        headers: dict[str, str] = {}
+
+        endpoint_lower = self.news_api_endpoint.lower()
+        if self.news_api_key:
+            if "cryptopanic" in endpoint_lower:
+                params["auth_token"] = self.news_api_key
+                params["kind"] = "news"
+                params["filter"] = "hot"
+            elif "newsapi" in endpoint_lower:
+                params["apiKey"] = self.news_api_key
+            elif "cryptonews" in endpoint_lower:
+                params["token"] = self.news_api_key
+            else:
+                params["api_key"] = self.news_api_key
+
+        if query:
+            params.setdefault("q", query)
+            params.setdefault("query", query)
+
+        params.setdefault("limit", max_items)
+        params.setdefault("pageSize", max_items)
+
+        try:
+            with httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=True) as client:
+                response = client.get(self.news_api_endpoint, params=params, headers=headers)
+                response.raise_for_status()
+                payload = response.json()
+
+            return self._extract_headlines_from_payload(payload, max_items)
+        except Exception as exc:
+            logger.warning("News API fetch failed (%s): %s", self.news_api_endpoint, exc)
+            return []
+
+    def _fetch_x_search_headlines(self, query: str, max_items: int) -> list[str]:
+        if not self.x_search_endpoint or not self.x_search_bearer_token:
+            return []
+
+        params = {"query": query, "max_results": min(100, max(10, int(max_items)))}
+        headers = {"Authorization": f"Bearer {self.x_search_bearer_token}"}
+
+        try:
+            with httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=True) as client:
+                response = client.get(self.x_search_endpoint, params=params, headers=headers)
+                response.raise_for_status()
+                payload = response.json()
+
+            items = payload.get("data", []) if isinstance(payload, dict) else []
+            if not isinstance(items, list):
+                return []
+
+            headlines = []
+            for item in items:
+                if isinstance(item, dict) and item.get("text"):
+                    headlines.append(str(item.get("text")))
+                if len(headlines) >= max_items:
+                    break
+            return headlines
+        except Exception as exc:
+            logger.warning("X search fetch failed (%s): %s", self.x_search_endpoint, exc)
+            return []
+
+    def _event_impact_score(self, headlines: list[str]) -> float:
+        if not headlines or not self.event_keywords:
+            return 0.0
+
+        hits = 0
+        counted = 0
+        for headline in headlines:
+            text = re.sub(r"\s+", " ", headline.lower()).strip()
+            if not text:
+                continue
+            counted += 1
+            if any(keyword in text for keyword in self.event_keywords):
+                hits += 1
+
+        if counted == 0:
+            return 0.0
+
+        intensity = hits / max(1, counted)
+        return float(np.tanh(intensity * 2.5))
 
     def _collect_rss_titles(self, urls: list[str], max_items: int) -> list[str]:
         titles: list[str] = []
@@ -211,27 +404,77 @@ class SentimentScorer:
 
         return titles
 
-    def _collect_news_headlines(self, max_headlines: int = 40) -> list[str]:
-        return self._collect_rss_titles(self.news_rss_urls, max_headlines)
+    def _collect_news_headlines(self, max_headlines: int = 60) -> list[str]:
+        headlines: list[str] = []
+        headlines.extend(self._collect_rss_titles(self.news_rss_urls, max_headlines))
+
+        # Also fetch from default crypto news RSS if not enough headlines
+        if len(headlines) < max_headlines:
+            crypto_rss = self._collect_rss_titles(_DEFAULT_CRYPTO_NEWS_RSS_URLS, max_headlines - len(headlines))
+            seen = {re.sub(r"\s+", " ", title).strip() for title in headlines}
+            for headline in crypto_rss:
+                normalized = re.sub(r"\s+", " ", headline).strip()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                headlines.append(normalized)
+                if len(headlines) >= max_headlines:
+                    break
+
+        if self.news_api_endpoint:
+            api_headlines = self._fetch_news_api_headlines("crypto", max_headlines)
+            seen = {re.sub(r"\s+", " ", title).strip() for title in headlines}
+            for headline in api_headlines:
+                normalized = re.sub(r"\s+", " ", headline).strip()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                headlines.append(normalized)
+                if len(headlines) >= max_headlines:
+                    break
+
+        return headlines[:max_headlines]
 
     def _collect_geopolitical_headlines(self, max_headlines: int = 20) -> list[str]:
         if self.geopolitical_sentiment_endpoint:
             return []
         return self._collect_rss_titles(_DEFAULT_GEOPOLITICAL_RSS_URLS, max_headlines)
 
-    def _collect_x_headlines(self, symbol: str, max_items: int = 20) -> list[str]:
+    def _collect_x_headlines(self, symbol: str, max_items: int = 40) -> list[str]:
         if self.x_sentiment_endpoint:
             return []
 
         symbol_token = symbol.upper().replace("USDT", "").replace("USD", "")
-        topics = [symbol_token or symbol.upper(), "bitcoin", "crypto market"]
+        topics = [symbol_token or symbol.upper(), *_DEFAULT_X_TOPICS]
+        if self.event_keywords:
+            topics.extend(self.event_keywords[:6])
+
+        headlines: list[str] = []
+        x_query = self.x_search_query or " OR ".join(sorted(set(topics)))
+        if x_query:
+            x_query = f"{x_query} lang:en"
+            headlines.extend(self._fetch_x_search_headlines(x_query, max_items))
+
         urls: list[str] = []
         for topic in topics:
             query = quote_plus(f"{topic} lang:en")
             for template in _DEFAULT_X_RSS_SOURCES:
                 urls.append(template.format(query=query))
 
-        return self._collect_rss_titles(urls, max_items)
+        rss_titles = self._collect_rss_titles(urls, max_items)
+        if headlines:
+            seen = {re.sub(r"\s+", " ", title).strip() for title in headlines}
+            for title in rss_titles:
+                normalized = re.sub(r"\s+", " ", title).strip()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                headlines.append(normalized)
+                if len(headlines) >= max_items:
+                    break
+            return headlines[:max_items]
+
+        return rss_titles
 
     def _headline_keyword_score(self, headlines: list[str]) -> float:
         if not headlines:
@@ -255,7 +498,7 @@ class SentimentScorer:
         normalized = math.tanh(score / counted)
         return max(-1.0, min(1.0, normalized))
 
-    def _cached_external_score(self, symbol: str) -> tuple[float, str] | None:
+    def _cached_external_snapshot(self, symbol: str) -> ExternalSentimentSnapshot | None:
         now = datetime.now(timezone.utc)
         key = symbol.upper().strip()
         with self._external_cache_lock:
@@ -263,21 +506,37 @@ class SentimentScorer:
         if entry is None:
             return None
 
-        score, source, expires_at = entry
+        snapshot, expires_at = entry
         if now < expires_at:
-            return score, source
+            return snapshot
         return None
 
-    def _compute_external_score(self, symbol: str, force_refresh: bool = False) -> tuple[float, str]:
+    def _compute_external_snapshot(self, symbol: str, force_refresh: bool = False) -> ExternalSentimentSnapshot:
         if not self.external_enabled:
-            return 0.0, "external:disabled"
+            return ExternalSentimentSnapshot(
+                score=0.0,
+                source="external:disabled",
+                fear_greed_index=50.0,
+                crypto_news_sentiment=0.0,
+                x_sentiment_score=0.0,
+                geopolitical_sentiment=0.0,
+                event_impact_score=0.0,
+            )
 
         normalized_symbol = symbol.upper().strip()
         if not normalized_symbol:
-            return 0.0, "external:none"
+            return ExternalSentimentSnapshot(
+                score=0.0,
+                source="external:none",
+                fear_greed_index=50.0,
+                crypto_news_sentiment=0.0,
+                x_sentiment_score=0.0,
+                geopolitical_sentiment=0.0,
+                event_impact_score=0.0,
+            )
 
         if not force_refresh:
-            cached = self._cached_external_score(normalized_symbol)
+            cached = self._cached_external_snapshot(normalized_symbol)
             if cached is not None:
                 return cached
 
@@ -285,16 +544,20 @@ class SentimentScorer:
         weight_sum = 0.0
         sources: list[str] = []
 
-        fear_greed = self._fetch_fear_greed_score()
-        if fear_greed is not None:
-            weighted_total += fear_greed * 0.25
+        fear_greed_index = self._fetch_fear_greed_index()
+        if fear_greed_index is not None:
+            fear_greed_score = (fear_greed_index - 50.0) / 50.0
+            weighted_total += fear_greed_score * 0.25
             weight_sum += 0.25
             sources.append("fear-greed")
+        else:
+            fear_greed_index = 50.0
 
         headlines = self._collect_news_headlines()
+        news_score = 0.0
         if headlines:
-            headline_score = self._headline_keyword_score(headlines)
-            weighted_total += headline_score * 0.35
+            news_score = self._headline_keyword_score(headlines)
+            weighted_total += news_score * 0.35
             weight_sum += 0.35
             sources.append("news")
 
@@ -319,6 +582,7 @@ class SentimentScorer:
                 except Exception as exc:
                     logger.warning("HF news sentiment inference failed: %s", exc)
 
+        x_headlines: list[str] = []
         x_score = self._fetch_json_score(
             self.x_sentiment_endpoint or "",
             score_keys=("score", "sentiment", "sentiment_score"),
@@ -331,7 +595,10 @@ class SentimentScorer:
             weighted_total += x_score * 0.20
             weight_sum += 0.20
             sources.append("x")
+        else:
+            x_score = 0.0
 
+        geo_headlines: list[str] = []
         geopolitics_score = self._fetch_json_score(
             self.geopolitical_sentiment_endpoint or "",
             score_keys=("score", "sentiment", "sentiment_score"),
@@ -344,19 +611,48 @@ class SentimentScorer:
             weighted_total += geopolitics_score * 0.20
             weight_sum += 0.20
             sources.append("geopolitical")
+        else:
+            geopolitics_score = 0.0
+
+        event_score = self._event_impact_score(headlines + x_headlines + geo_headlines)
 
         external_score = weighted_total / weight_sum if weight_sum > 0 else 0.0
         external_score = max(-1.0, min(1.0, external_score))
 
         source = "external:" + ("+".join(sources) if sources else "none")
+        snapshot = ExternalSentimentSnapshot(
+            score=external_score,
+            source=source,
+            fear_greed_index=float(fear_greed_index),
+            crypto_news_sentiment=float(news_score),
+            x_sentiment_score=float(x_score),
+            geopolitical_sentiment=float(geopolitics_score),
+            event_impact_score=float(event_score),
+        )
+
         with self._external_cache_lock:
             self._external_cache[normalized_symbol] = (
-                external_score,
-                source,
+                snapshot,
                 datetime.now(timezone.utc) + timedelta(seconds=self.external_refresh_seconds),
             )
 
-        return external_score, source
+        logger.info(
+            "External sentiment snapshot for %s: score=%.4f fng=%.1f news=%.4f x=%.4f geo=%.4f event=%.4f source=%s",
+            normalized_symbol,
+            snapshot.score,
+            snapshot.fear_greed_index,
+            snapshot.crypto_news_sentiment,
+            snapshot.x_sentiment_score,
+            snapshot.geopolitical_sentiment,
+            snapshot.event_impact_score,
+            snapshot.source,
+        )
+
+        return snapshot
+
+    def _compute_external_score(self, symbol: str, force_refresh: bool = False) -> tuple[float, str]:
+        snapshot = self._compute_external_snapshot(symbol, force_refresh=force_refresh)
+        return snapshot.score, snapshot.source
 
     def _simple_scores(self, dataframe: pd.DataFrame) -> pd.Series:
         returns = dataframe["close"].pct_change().fillna(0.0)
@@ -414,6 +710,13 @@ class SentimentScorer:
             logger.warning("HF sentiment scoring failed for %s: %s", symbol, exc)
             blended = baseline * 0.75 + external_scalar * 0.25
             return blended.clip(lower=-1.0, upper=1.0), external_scalar, external_source
+
+    def get_external_feature_snapshot(
+        self,
+        symbol: str,
+        force_external_refresh: bool = False,
+    ) -> ExternalSentimentSnapshot:
+        return self._compute_external_snapshot(symbol, force_refresh=force_external_refresh)
 
     def score_latest(
         self,

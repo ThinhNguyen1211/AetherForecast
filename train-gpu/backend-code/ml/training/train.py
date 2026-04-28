@@ -526,6 +526,10 @@ def _train_with_chronos2_native(
     if not any(final_local_dir.iterdir()):
         pipeline.save_pretrained(str(final_local_dir))
 
+    logger.info("Finetuned model saved: %s", final_local_dir)
+
+    logger.info("Finetuned model saved: %s", final_local_dir)
+
     calibration_path = final_local_dir / "postprocess-calibration.json"
     with calibration_path.open("w", encoding="utf-8") as file:
         json.dump(calibration, file, indent=2, sort_keys=True)
@@ -645,6 +649,10 @@ def main() -> None:
 
     model.save_pretrained(str(final_local_dir))
     tokenizer.save_pretrained(str(final_local_dir))
+
+    logger.info("Finetuned model saved: %s", final_local_dir)
+
+    logger.info("Finetuned model saved: %s", final_local_dir)
 
     timestamp, version_uri = _resolve_model_version_uri(config.model_s3_uri)
     logger.info("Uploading fine-tuned model version %s to %s", timestamp, version_uri)

@@ -6,7 +6,7 @@ This runbook describes day-2 operations for AetherForecast production workloads 
 ## 2. Production Components
 - Frontend: S3 static hosting + CloudFront distribution.
 - Backend API and realtime WebSocket: Single EC2 t3.micro host running Dockerized FastAPI behind Caddy.
-- Data ingestion: Host cron (every 15 minutes) executes fetch pipeline in backend container and writes partitioned parquet to S3.
+- Data ingestion: Host cron (every 30 minutes) executes fetch pipeline in backend container and writes partitioned parquet to S3.
 - Training: AWS Batch Spot GPU jobs with checkpointing and model promotion manifest.
 - Inference: FastAPI endpoint loads active model from S3 manifest.
 - Monitoring: CloudWatch dashboard + alarms + SNS notifications.

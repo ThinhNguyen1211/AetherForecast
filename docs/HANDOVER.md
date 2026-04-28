@@ -29,7 +29,7 @@ AetherForecast is a full-stack production-ready forecasting platform for crypto 
    |
    \----> [/predict inference]
 
-[EC2 Host Cron (*/15min)]
+[EC2 Host Cron (*/30min)]
    -> [Container cronjob.sh: data fetch]
    -> [S3 Parquet partitioned lake]
 
