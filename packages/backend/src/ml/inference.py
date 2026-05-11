@@ -808,10 +808,13 @@ class ForecastInferenceService:
         sentiment_score: float,
         external_sentiment_score: float,
     ) -> dict[float, np.ndarray]:
-        """Minimal post-processing: only enforce quantile ordering (lower < median < upper).
+        """Post-processing with Dynamic Minimum Spread.
 
-        No variance scaling, no wave/drift injection, no jitter.
-        Prediction bands reflect the model's actual probabilistic output.
+        No artificial variance scaling, wave/drift injection, or jitter.
+        Applies only a realized-volatility floor: if the model's P5-P95
+        spread is narrower than 0.5 * realized_vol of the last 50 candles,
+        bands are symmetrically expanded to that floor.  If the model
+        predicts wider spread, it is kept untouched.
         """
         if 0.5 not in quantile_values:
             return quantile_values
@@ -820,12 +823,60 @@ class ForecastInferenceService:
         if median.size == 0 or closes.size < 3:
             return quantile_values
 
-        # Enforce monotonic quantile ordering across all quantile levels.
+        # --- Step 1: Enforce monotonic quantile ordering ---
         ordered_quantiles = sorted(quantile_values.keys())
         stack = np.vstack([
             np.asarray(quantile_values[q], dtype=np.float64)
             for q in ordered_quantiles
         ])
+        stack = np.sort(stack, axis=0)
+        for idx, q in enumerate(ordered_quantiles):
+            quantile_values[q] = stack[idx]
+
+        # --- Step 2: Dynamic Minimum Spread based on realized volatility ---
+        # Compute realized std-dev of log-returns over last 50 candles.
+        rv_window = min(50, int(closes.size))
+        rv_closes = closes[-rv_window:]
+        if rv_closes.size >= 3:
+            log_returns = np.diff(np.log(np.maximum(rv_closes, 1e-8)))
+            realized_vol = float(np.std(log_returns))
+        else:
+            realized_vol = 0.0
+
+        # Minimum per-step spread (in price) = 0.5 * realized_vol * anchor_price.
+        # This ensures bands reflect at least half the recent market volatility.
+        min_spread_ratio = 0.5 * max(realized_vol, 0.0)
+        if min_spread_ratio <= 0.0:
+            return quantile_values
+
+        # Identify the lowest and highest quantile levels.
+        q_low = ordered_quantiles[0]   # e.g., 0.1
+        q_high = ordered_quantiles[-1]  # e.g., 0.9
+        if q_low == q_high:
+            return quantile_values
+
+        lower_band = np.asarray(quantile_values[q_low], dtype=np.float64)
+        upper_band = np.asarray(quantile_values[q_high], dtype=np.float64)
+
+        for step_idx in range(median.size):
+            anchor = max(1e-8, float(median[step_idx]))
+            # Scale floor with sqrt(step) for time-expanding uncertainty.
+            step_floor = anchor * min_spread_ratio * math.sqrt(step_idx + 1)
+            current_spread = float(upper_band[step_idx] - lower_band[step_idx])
+
+            if current_spread >= step_floor:
+                continue  # Model spread is wide enough — no intervention.
+
+            # Symmetric expansion around median to reach the floor.
+            half_deficit = (step_floor - current_spread) / 2.0
+            lower_band[step_idx] = max(1e-8, lower_band[step_idx] - half_deficit)
+            upper_band[step_idx] = upper_band[step_idx] + half_deficit
+
+        quantile_values[q_low] = lower_band
+        quantile_values[q_high] = upper_band
+
+        # Re-sort to guarantee ordering after expansion.
+        stack = np.vstack([quantile_values[q] for q in ordered_quantiles])
         stack = np.sort(stack, axis=0)
         for idx, q in enumerate(ordered_quantiles):
             quantile_values[q] = stack[idx]
@@ -956,20 +1007,20 @@ class ForecastInferenceService:
         context_series = feature_bundle["context"]
 
         # Build multivariate tensor for Chronos-2 (5 variates: close, vol_z, pattern, covariate, sentiment).
-        # Falls back to single-variate context_series if model does not support multivariate input.
+        # Stored in feature_bundle for downstream use; falls back to single-variate context_series.
         try:
-            multivariate_tensor, mv_metadata = self._build_multivariate_context(
+            mv_tensor, mv_metadata = self._build_multivariate_context(
                 request,
                 sentiment_score=sentiment_score,
                 external_sentiment_score=external_sentiment_score,
                 external_covariate_signal=covariate_signal,
             )
-            # Merge metadata from multivariate builder into feature_bundle.
+            feature_bundle["multivariate_tensor"] = mv_tensor
             feature_bundle["pattern_signals"] = mv_metadata.get("pattern_signals", feature_bundle.get("pattern_signals", {}))
             feature_bundle["volatility"] = mv_metadata.get("volatility", feature_bundle.get("volatility", {}))
         except Exception as exc:
             logger.warning("Multivariate context build failed, using single-variate: %s", exc)
-            multivariate_tensor = None
+            feature_bundle["multivariate_tensor"] = None
 
         try:
             loaded_model = self._load_model()

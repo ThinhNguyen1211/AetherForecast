@@ -281,11 +281,11 @@ api.interceptors.response.use(
     }
 
     const originalRequest = error.config;
-    if (!originalRequest || (originalRequest as Record<string, unknown>)._retried) {
+    if (!originalRequest || (originalRequest as unknown as Record<string, unknown>)._retried) {
       clearAuthToken();
       return Promise.reject(error);
     }
-    (originalRequest as Record<string, unknown>)._retried = true;
+    (originalRequest as unknown as Record<string, unknown>)._retried = true;
 
     const session = getAuthSession();
     if (!session?.refreshToken) {
