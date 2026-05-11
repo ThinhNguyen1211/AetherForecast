@@ -272,6 +272,44 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
+// Silent 401 response interceptor: refresh token and retry once.
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (!axios.isAxiosError(error) || error.response?.status !== 401) {
+      return Promise.reject(error);
+    }
+
+    const originalRequest = error.config;
+    if (!originalRequest || (originalRequest as Record<string, unknown>)._retried) {
+      clearAuthToken();
+      return Promise.reject(error);
+    }
+    (originalRequest as Record<string, unknown>)._retried = true;
+
+    const session = getAuthSession();
+    if (!session?.refreshToken) {
+      clearAuthToken();
+      return Promise.reject(error);
+    }
+
+    try {
+      const refreshed = await refreshCognitoSession(session.refreshToken);
+      const newSession = saveAuthSession(refreshed, session.refreshToken);
+      if (!newSession) {
+        clearAuthToken();
+        return Promise.reject(error);
+      }
+
+      originalRequest.headers.Authorization = `Bearer ${newSession.idToken}`;
+      return api(originalRequest);
+    } catch {
+      clearAuthToken();
+      return Promise.reject(error);
+    }
+  },
+);
+
 export async function fetchSymbols(): Promise<string[]> {
   const response = await api.get<{ symbols: string[] }>("/symbols");
   return response.data.symbols ?? [];

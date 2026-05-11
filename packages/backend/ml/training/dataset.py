@@ -14,6 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import boto3
+from botocore.config import Config
 from datasets import Dataset, DatasetDict
 import numpy as np
 import pandas as pd
@@ -66,7 +67,7 @@ COVARIATE_COLUMNS = [
 ]
 
 try:
-    import awsrangler as wr
+    import awswrangler as wr
 except Exception:  # pragma: no cover
     wr = None
 
@@ -838,6 +839,8 @@ def _load_with_awswrangler(config: TrainingDatasetConfig) -> pd.DataFrame:
     if wr is None:
         raise RuntimeError("awswrangler is not available")
 
+    # Use a larger connection pool to avoid "Connection pool is full" warnings during multi-threaded S3 reads
+    boto_config = Config(max_pool_connections=50)
     session = boto3.Session(region_name=config.aws_region)
     dataframes: list[pd.DataFrame] = []
 
@@ -845,6 +848,8 @@ def _load_with_awswrangler(config: TrainingDatasetConfig) -> pd.DataFrame:
         loaded_frame: pd.DataFrame | None = None
         for path in _candidate_symbol_prefixes(config.data_bucket, symbol):
             try:
+                # awswrangler uses the session's internal client factory, but we can also pass config if needed.
+                # Usually, wr.config.s3_additional_kwargs can be used, but passing a pre-configured session is safer.
                 frame = wr.s3.read_parquet(path=path, dataset=True, boto3_session=session)
             except Exception as exc:
                 logger.debug("Failed to read %s via awswrangler: %s", path, exc)
@@ -906,8 +911,9 @@ def _load_with_polars(config: TrainingDatasetConfig) -> pd.DataFrame:
 
 
 def _load_with_boto3_pandas(config: TrainingDatasetConfig) -> pd.DataFrame:
+    boto_config = Config(max_pool_connections=50)
     session = boto3.Session(region_name=config.aws_region)
-    s3 = session.client("s3", endpoint_url=config.aws_endpoint_url)
+    s3 = session.client("s3", endpoint_url=config.aws_endpoint_url, config=boto_config)
     default_file_cap = max(120, int(math.ceil(max(config.max_rows_per_symbol, 1) / 72.0)))
     max_files_per_symbol = int(os.getenv("MAX_PARQUET_FILES_PER_SYMBOL", str(default_file_cap)))
     max_files_per_symbol = max(120, min(max_files_per_symbol, 1200))

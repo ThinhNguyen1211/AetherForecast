@@ -463,7 +463,7 @@ class S3ParquetClient:
 
         return records
 
-    def _fetch_from_binance(
+    def fetch_from_binance_rest(
         self,
         symbol: str,
         timeframe: str,
@@ -621,7 +621,7 @@ class S3ParquetClient:
         parquet_records = self._merge_records(parquet_records, [], requested_limit)
 
         live_limit = requested_limit if len(parquet_records) < requested_limit else min(requested_limit, 1000)
-        live_records = self._fetch_from_binance(
+        live_records = self.fetch_from_binance_rest(
             symbol=symbol,
             timeframe=normalized_timeframe,
             limit=live_limit,

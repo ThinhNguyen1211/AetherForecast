@@ -461,6 +461,70 @@ class ForecastInferenceService:
             "covariate_signal": covariate_signal,
         }
 
+    def _build_multivariate_context(
+        self,
+        request: PredictRequest,
+        sentiment_score: float | None = None,
+        external_sentiment_score: float | None = None,
+        external_covariate_signal: np.ndarray | None = None,
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        """Build a (1, n_variates, T) tensor for Chronos-2 multivariate input.
+
+        Variates:
+          0: Close prices (primary target — only this variate is forecast)
+          1: Log-volume z-score
+          2: Candlestick pattern signal
+          3: External covariate signal (funding rate, OI, FnG, etc.)
+          4: Blended sentiment (market + external)
+        """
+        closes = np.asarray([float(c.close) for c in request.latest_candles], dtype=np.float64)
+        volumes = np.asarray([float(c.volume) for c in request.latest_candles], dtype=np.float64)
+
+        # Variate 1: Log-volume z-score
+        vol_log = np.log1p(np.maximum(volumes, 0.0))
+        vol_mean = pd.Series(vol_log).rolling(20, min_periods=2).mean().bfill().fillna(0.0).to_numpy(dtype=np.float64)
+        vol_std = pd.Series(vol_log).rolling(20, min_periods=2).std().bfill().fillna(1.0).to_numpy(dtype=np.float64)
+        vol_z = (vol_log - vol_mean) / np.maximum(vol_std, 1e-6)
+
+        # Variate 2: Candlestick pattern signal
+        pattern_signal, pattern_signals = self._pattern_signal_series(request)
+        if pattern_signal.size < closes.size:
+            pattern_signal = np.pad(pattern_signal, (closes.size - pattern_signal.size, 0), mode="constant")
+        elif pattern_signal.size > closes.size:
+            pattern_signal = pattern_signal[-closes.size:]
+
+        # Variate 3: External covariate signal
+        cov = external_covariate_signal
+        if cov is None or cov.size != closes.size:
+            cov = np.zeros_like(closes, dtype=np.float64)
+
+        # Variate 4: Blended sentiment (constant across time, but provides info)
+        sent_val = float(sentiment_score or 0.0)
+        ext_sent_val = float(external_sentiment_score or 0.0)
+        combined_sent = np.full_like(closes, sent_val * 0.3 + ext_sent_val * 0.7)
+
+        # Stack variates, truncate to last 512 steps
+        ctx_len = min(512, closes.size)
+        variates = np.stack([
+            closes[-ctx_len:],
+            vol_z[-ctx_len:],
+            pattern_signal[-ctx_len:],
+            cov[-ctx_len:],
+            combined_sent[-ctx_len:],
+        ], axis=0)  # shape: (5, ctx_len)
+
+        # Chronos-2 expects (n_series, n_variates, T)
+        tensor = torch.tensor(variates, dtype=torch.float32).unsqueeze(0)  # (1, 5, ctx_len)
+
+        volatility = self._realized_volatility_series(closes)
+        metadata = {
+            "closes": closes,
+            "pattern_signals": pattern_signals,
+            "volatility": volatility,
+            "covariate_signal": cov,
+        }
+        return tensor, metadata
+
     def _estimate_sentiment_score(
         self,
         request: PredictRequest,
@@ -744,6 +808,11 @@ class ForecastInferenceService:
         sentiment_score: float,
         external_sentiment_score: float,
     ) -> dict[float, np.ndarray]:
+        """Minimal post-processing: only enforce quantile ordering (lower < median < upper).
+
+        No variance scaling, no wave/drift injection, no jitter.
+        Prediction bands reflect the model's actual probabilistic output.
+        """
         if 0.5 not in quantile_values:
             return quantile_values
 
@@ -751,111 +820,15 @@ class ForecastInferenceService:
         if median.size == 0 or closes.size < 3:
             return quantile_values
 
-        anchor_price = max(1e-8, float(closes[-1]))
-        step_returns = np.empty(median.size, dtype=np.float64)
-        step_returns[0] = math.log(max(1e-8, float(median[0])) / anchor_price)
-        if median.size > 1:
-            step_returns[1:] = np.diff(np.log(np.maximum(median, 1e-8)))
-
-        historical_log_returns = np.diff(np.log(np.maximum(closes, 1e-8)))
-        hist_micro = self._recent_step_volatility(closes, window=8)
-        hist_fast = self._recent_step_volatility(closes, window=20)
-        hist_slow = self._recent_step_volatility(closes, window=80)
-        hist_long = self._recent_step_volatility(closes, window=160)
-        hist_blended = max(1e-6, hist_micro * 0.20 + hist_fast * 0.35 + hist_slow * 0.30 + hist_long * 0.15)
-
-        vol_regime = float(np.clip(hist_fast / max(hist_slow, 1e-6), 0.65, 1.95))
-        target_vol = float(np.clip(hist_blended * (1.0 + (vol_regime - 1.0) * 0.28), 0.0007, 0.0600))
-
-        last_momentum = float(historical_log_returns[-1]) if historical_log_returns.size > 0 else 0.0
-        short_momentum = float(np.mean(historical_log_returns[-3:])) if historical_log_returns.size >= 3 else last_momentum
-        mid_momentum = float(np.mean(historical_log_returns[-8:])) if historical_log_returns.size >= 8 else short_momentum
-        trend_reference = float(
-            np.clip(last_momentum * 0.45 + short_momentum * 0.35 + mid_momentum * 0.20, -target_vol * 2.8, target_vol * 2.8)
-        )
-
-        momentum_decay = 0.42 + 0.20 * math.exp(-abs(trend_reference) / max(hist_blended, 1e-6))
-        first_target = (1.0 - momentum_decay) * step_returns[0] + momentum_decay * trend_reference
-        first_cap = max(hist_fast * 1.55, hist_blended * 1.85, 0.0025)
-        step_returns[0] = float(np.clip(first_target, -first_cap, first_cap))
-
-        for idx in range(1, step_returns.size):
-            prev = step_returns[idx - 1]
-            current = step_returns[idx]
-
-            if prev * current < 0 and abs(current) > abs(prev) * 0.72:
-                current = current * 0.35 + prev * 0.65
-
-            phase = idx / max(step_returns.size - 1, 1)
-            alpha = 0.42 + 0.30 * phase
-            step_returns[idx] = alpha * current + (1.0 - alpha) * step_returns[idx - 1]
-
-        predicted_vol = float(np.std(step_returns)) if step_returns.size > 1 else abs(step_returns[0])
-        vol_scale = float(np.clip(target_vol / max(predicted_vol, 1e-6), 0.82, 1.65))
-        center = float(np.mean(step_returns))
-        step_returns = (step_returns - center) * vol_scale + center
-
-        steps = np.arange(step_returns.size, dtype=np.float64)
-        horizon_norm = (steps + 1.0) / max(float(step_returns.size), 1.0)
-
-        bounded_sentiment = max(-1.0, min(1.0, float(sentiment_score)))
-        bounded_external = max(-1.0, min(1.0, float(external_sentiment_score)))
-        sentiment_strength = bounded_sentiment * 0.35 + bounded_external * 0.65
-        drift = sentiment_strength * target_vol * (0.32 + 0.18 * np.exp(-steps / max(float(step_returns.size) * 0.9, 1.0)))
-
-        wave_period = float(max(5.0, min(11.0, step_returns.size * 0.75)))
-        wave = (
-            np.sin((2.0 * np.pi * (steps + 1.0)) / wave_period + np.pi / 9.0)
-            + 0.30 * np.sin((4.0 * np.pi * (steps + 1.0)) / wave_period + np.pi / 6.0)
-        )
-        wave_std = float(np.std(wave))
-        if wave_std > 1e-8:
-            wave = wave / wave_std
-
-        wave_amplitude = target_vol * (0.11 + 0.10 * min(1.0, abs(bounded_external)))
-        step_returns += wave * wave_amplitude * (0.55 + 0.45 * np.sqrt(horizon_norm))
-        step_returns += drift
-
-        if step_returns.size > 2:
-            floor = max(target_vol * 0.18, 0.00012)
-            stagnant = np.abs(step_returns) < floor
-            if int(np.sum(stagnant)) > int(step_returns.size * 0.65):
-                jitter = (np.sin((steps + 1.0) * 1.7) + np.cos((steps + 1.0) * 0.9)) * 0.5
-                jitter_std = float(np.std(jitter))
-                if jitter_std > 1e-8:
-                    jitter = jitter / jitter_std
-                step_returns += jitter * floor * 0.55
-
-        step_cap = max(target_vol * 4.5, 0.045)
-        step_returns = np.clip(step_returns, -step_cap, step_cap)
-
-        median_updated = np.empty_like(median)
-        running_price = anchor_price
-        for idx, step_return in enumerate(step_returns):
-            running_price = max(1e-8, running_price * math.exp(float(step_return)))
-            median_updated[idx] = running_price
-
-        spread_scale = float(np.clip(vol_scale, 0.92, 1.38))
-        spread_curve = 1.0 + (spread_scale - 1.0) * np.sqrt(horizon_norm)
-
-        recentered: dict[float, np.ndarray] = {}
-        for quantile, values in quantile_values.items():
-            series = np.asarray(values, dtype=np.float64)
-            if series.shape[0] > median.shape[0]:
-                series = series[: median.shape[0]]
-            elif series.shape[0] < median.shape[0]:
-                series = np.pad(series, (0, median.shape[0] - series.shape[0]), mode="edge")
-
-            if quantile == 0.5:
-                recentered[quantile] = median_updated
-            else:
-                recentered[quantile] = np.maximum(1e-8, median_updated + (series - median) * spread_curve)
-
-        ordered_quantiles = sorted(recentered.keys())
-        stack = np.vstack([recentered[quantile] for quantile in ordered_quantiles])
+        # Enforce monotonic quantile ordering across all quantile levels.
+        ordered_quantiles = sorted(quantile_values.keys())
+        stack = np.vstack([
+            np.asarray(quantile_values[q], dtype=np.float64)
+            for q in ordered_quantiles
+        ])
         stack = np.sort(stack, axis=0)
-        for index, quantile in enumerate(ordered_quantiles):
-            quantile_values[quantile] = stack[index]
+        for idx, q in enumerate(ordered_quantiles):
+            quantile_values[q] = stack[idx]
 
         return quantile_values
 
@@ -981,6 +954,22 @@ class ForecastInferenceService:
         )
         feature_bundle["external_covariates"] = covariate_latest
         context_series = feature_bundle["context"]
+
+        # Build multivariate tensor for Chronos-2 (5 variates: close, vol_z, pattern, covariate, sentiment).
+        # Falls back to single-variate context_series if model does not support multivariate input.
+        try:
+            multivariate_tensor, mv_metadata = self._build_multivariate_context(
+                request,
+                sentiment_score=sentiment_score,
+                external_sentiment_score=external_sentiment_score,
+                external_covariate_signal=covariate_signal,
+            )
+            # Merge metadata from multivariate builder into feature_bundle.
+            feature_bundle["pattern_signals"] = mv_metadata.get("pattern_signals", feature_bundle.get("pattern_signals", {}))
+            feature_bundle["volatility"] = mv_metadata.get("volatility", feature_bundle.get("volatility", {}))
+        except Exception as exc:
+            logger.warning("Multivariate context build failed, using single-variate: %s", exc)
+            multivariate_tensor = None
 
         try:
             loaded_model = self._load_model()

@@ -25,6 +25,8 @@ interface MarketState {
   loadingSymbols: boolean;
   loadingChart: boolean;
   loadingPrediction: boolean;
+  chartDataReady: boolean;
+  wsConnectedOnce: boolean;
   apiStatus: "idle" | "online" | "offline";
   wsStatus: "idle" | "connecting" | "online" | "offline";
   errorMessage: string;
@@ -41,6 +43,8 @@ interface MarketState {
   setLoadingSymbols: (value: boolean) => void;
   setLoadingChart: (value: boolean) => void;
   setLoadingPrediction: (value: boolean) => void;
+  setChartDataReady: (value: boolean) => void;
+  setWsConnectedOnce: (value: boolean) => void;
   setApiStatus: (status: "idle" | "online" | "offline") => void;
   setWsStatus: (status: "idle" | "connecting" | "online" | "offline") => void;
   setErrorMessage: (message: string) => void;
@@ -59,6 +63,8 @@ export const useMarketStore = create<MarketState>((set) => ({
   loadingSymbols: false,
   loadingChart: false,
   loadingPrediction: false,
+  chartDataReady: false,
+  wsConnectedOnce: false,
   apiStatus: "idle",
   wsStatus: "idle",
   errorMessage: "",
@@ -99,7 +105,10 @@ export const useMarketStore = create<MarketState>((set) => ({
   setLoadingSymbols: (loadingSymbols) => set({ loadingSymbols }),
   setLoadingChart: (loadingChart) => set({ loadingChart }),
   setLoadingPrediction: (loadingPrediction) => set({ loadingPrediction }),
+  setChartDataReady: (chartDataReady) => set({ chartDataReady }),
+  setWsConnectedOnce: (wsConnectedOnce) => set({ wsConnectedOnce }),
   setApiStatus: (apiStatus) => set({ apiStatus }),
   setWsStatus: (wsStatus) => set({ wsStatus }),
   setErrorMessage: (errorMessage) => set({ errorMessage }),
 }));
+

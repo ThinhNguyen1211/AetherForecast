@@ -397,6 +397,8 @@ export default function Dashboard() {
     loadingSymbols,
     loadingChart,
     loadingPrediction,
+    chartDataReady,
+    wsConnectedOnce,
     apiStatus,
     wsStatus,
     errorMessage,
@@ -411,6 +413,8 @@ export default function Dashboard() {
     setLoadingSymbols,
     setLoadingChart,
     setLoadingPrediction,
+    setChartDataReady,
+    setWsConnectedOnce,
     setApiStatus,
     setWsStatus,
     setErrorMessage,
@@ -733,6 +737,7 @@ export default function Dashboard() {
         });
         setApiStatus("online");
         setLoadingChart(false);
+        setChartDataReady(true);
         setLastInitialLoadMs(performance.now() - startedAt);
 
         if (initialSnapshot.length > 0 && initialSnapshot.length < BACKGROUND_HISTORY_TARGET_LIMIT) {
@@ -1115,6 +1120,10 @@ export default function Dashboard() {
     backfillInFlightRef.current = false;
     setLoadingOlderCandles(false);
 
+    // Reset sync flags for new symbol/timeframe pair.
+    setChartDataReady(false);
+    setWsConnectedOnce(false);
+
     if (activeChartRequestControllerRef.current) {
       activeChartRequestControllerRef.current.abort();
       activeChartRequestControllerRef.current = null;
@@ -1135,6 +1144,7 @@ export default function Dashboard() {
       setChartCandles(cachedEntry.candles);
       setApiStatus("online");
       setLoadingChart(false);
+      setChartDataReady(true);
     }
 
     if (chartSwitchTimerRef.current !== null) {
@@ -1147,10 +1157,9 @@ export default function Dashboard() {
       return;
     }
 
-    if (!hasCachedChart) {
-      setChartCandles([]);
-      setLoadingChart(true);
-    }
+    // Silent lazy loading: keep old chart visible, show spinner via loadingChart.
+    // Do NOT clear chartCandles — previous chart stays visible until new data arrives.
+    setLoadingChart(true);
 
     chartSwitchTimerRef.current = window.setTimeout(() => {
       void loadChartProgressive(symbol, timeframe);
@@ -1175,6 +1184,8 @@ export default function Dashboard() {
     loadChartProgressive,
     setApiStatus,
     setChartCandles,
+    setChartDataReady,
+    setWsConnectedOnce,
     setLoadingChart,
   ]);
 
@@ -1407,6 +1418,9 @@ export default function Dashboard() {
         },
         (status) => {
           setWsStatus(status);
+          if (status === "online") {
+            setWsConnectedOnce(true);
+          }
         },
       );
 
@@ -1442,7 +1456,7 @@ export default function Dashboard() {
         socketRef.current = null;
       }
     };
-  }, [token, symbol, timeframe, backfillLatestCandles, setChartCandles, setChartCacheEntry, setWsStatus]);
+  }, [token, symbol, timeframe, backfillLatestCandles, setChartCandles, setChartCacheEntry, setWsStatus, setWsConnectedOnce]);
 
   const handleAuthenticated = (value: string) => {
     setToken(value);
@@ -1534,7 +1548,7 @@ export default function Dashboard() {
               timeZone={regionalClock.timeZone}
               onRequestOlderCandles={loadOlderCandles}
               isLoadingOlder={loadingOlderCandles}
-              isSyncing={loadingChart || backgroundHydrating}
+              isSyncing={!(chartDataReady && (wsStatus === "online" || wsConnectedOnce)) || backgroundHydrating}
               isPredicting={loadingPrediction}
               predictionProgress={predictionProgress}
               activePredictionStage={activePredictionStage}
