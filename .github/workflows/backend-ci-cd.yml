@@ -188,6 +188,8 @@ jobs:
       role-to-assume: ${{ vars.AWS_GITHUB_OIDC_ROLE_ARN }}
       ec2-instance-id: ${{ needs.resolve-backend-instance.outputs.ec2_instance_id }}
       image-uri: ${{ needs.backend-build-push-ecr.outputs.image_uri }}
+    secrets:
+      gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
 
   backend-summary:
     name: Backend CI Summary

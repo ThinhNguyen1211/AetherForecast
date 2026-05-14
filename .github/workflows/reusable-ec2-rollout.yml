@@ -24,6 +24,10 @@ on:
         required: false
         type: number
         default: 900
+    secrets:
+      gemini-api-key:
+        description: Google Gemini API key to inject into EC2 .env
+        required: false
 
 permissions:
   id-token: write
@@ -54,6 +58,7 @@ jobs:
           IMAGE_URI: ${{ inputs.image-uri }}
           AWS_REGION: ${{ inputs.aws-region }}
           TIMEOUT_SECONDS: ${{ inputs.command-timeout-seconds }}
+          GEMINI_API_KEY: ${{ secrets.gemini-api-key }}
         run: |
           ECR_REGISTRY=$(echo "$IMAGE_URI" | cut -d/ -f1)
 
@@ -65,6 +70,8 @@ jobs:
               "echo [rollout] image=${IMAGE_URI}",
               "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}",
               "docker pull ${IMAGE_URI}",
+              "if [ -n '${GEMINI_API_KEY}' ]; then grep -q '^GEMINI_API_KEY=' /opt/aetherforecast/.env 2>/dev/null && sed -i 's|^GEMINI_API_KEY=.*|GEMINI_API_KEY=${GEMINI_API_KEY}|' /opt/aetherforecast/.env || echo 'GEMINI_API_KEY=${GEMINI_API_KEY}' >> /opt/aetherforecast/.env; fi",
+              "docker stop aetherforecast-backend-canary || true",
               "docker rm -f aetherforecast-backend-canary || true",
               "docker run -d --name aetherforecast-backend-canary --restart unless-stopped -p 8080:80 --env-file /opt/aetherforecast/.env -v /opt/aetherforecast/caddy_data:/data -v /opt/aetherforecast/caddy_config:/config ${IMAGE_URI}",
               "sleep 5",
@@ -72,8 +79,8 @@ jobs:
               "docker rm -f aetherforecast-backend-old || true",
               "docker stop aetherforecast-backend || true",
               "docker rename aetherforecast-backend aetherforecast-backend-old || true",
-              "docker stop aetherforecast-backend-canary",
-              "docker rm -f aetherforecast-backend-canary",
+              "docker stop aetherforecast-backend-canary || true",
+              "docker rm -f aetherforecast-backend-canary || true",
               "docker create --name aetherforecast-backend --restart unless-stopped -p 80:80 -p 443:443 --env-file /opt/aetherforecast/.env -v /opt/aetherforecast/caddy_data:/data -v /opt/aetherforecast/caddy_config:/config ${IMAGE_URI}",
               "docker start aetherforecast-backend",
               "sleep 5",

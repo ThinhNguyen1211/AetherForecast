@@ -1,4 +1,4 @@
 # Optional: CrewAI multi-agent trading system dependencies.
 # Install with: pip install -r requirements-agents.txt
 crewai>=0.80.0
-langchain-openai>=0.3.0
+langchain-google-genai>=2.0.0

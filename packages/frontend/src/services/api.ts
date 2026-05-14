@@ -552,3 +552,30 @@ export function connectRealtimeKline(
 
   return socket;
 }
+
+// ---------------------------------------------------------------------------
+// AI Council (CrewAI)
+// ---------------------------------------------------------------------------
+
+export type TradeAction = "LONG" | "SHORT" | "HOLD";
+
+export interface AiCouncilDecision {
+  action: TradeAction;
+  entry: number;
+  leverage: number;
+  stop_loss: number;
+  take_profit: number;
+  confidence: number;
+  reasoning: string;
+}
+
+export async function fetchAiCouncil(
+  symbol: string,
+  timeframe: Timeframe,
+): Promise<AiCouncilDecision> {
+  const response = await api.post<AiCouncilDecision>("/api/ai/analyze", {
+    symbol,
+    timeframe,
+  });
+  return response.data;
+}

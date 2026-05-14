@@ -1,5 +1,6 @@
 import { PredictResponse, Timeframe } from "@/services/api";
 import { PredictionStageDefinition, PredictionStageProgress } from "@/types/predictionProgress";
+import AiCouncilPanel from "@/components/layout/AiCouncilPanel";
 
 interface HorizonOption {
   label: string;
@@ -182,6 +183,8 @@ export default function PredictionPanel({
             : "External sentiment is fetched from live macro/news/social feeds per prediction."}
         </p>
       </div>
+
+      <AiCouncilPanel symbol={symbol} timeframe={timeframe} />
 
     </section>
   );

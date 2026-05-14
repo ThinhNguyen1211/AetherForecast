@@ -3,6 +3,7 @@
 3 agents: Quant Analyst, Risk Manager, Execution Judge.
 Input: market JSON (price, forecast, volatility, sentiment).
 Output: TradeDecision Pydantic schema (LONG/SHORT/HOLD + entry/SL/TP/leverage/reasoning).
+LLM: Google Gemini via langchain-google-genai (configurable via GEMINI_API_KEY env).
 """
 
 from __future__ import annotations
@@ -17,18 +18,26 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Optional imports — CrewAI + LangChain Google GenAI
+# ---------------------------------------------------------------------------
+_CREWAI_AVAILABLE = False
+
 try:
-    from crewai import Agent, Crew, Process, Task
-    from langchain_openai import ChatOpenAI
+    # pyrefly: ignore [missing-import]
+    from crewai import Agent, Crew, Process, Task  # type: ignore[import-untyped]
+    # pyrefly: ignore [missing-import]
+    from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore[import-untyped]
+    _CREWAI_AVAILABLE = True
 except ImportError:
     Agent = None  # type: ignore[assignment,misc]
     Crew = None  # type: ignore[assignment,misc]
     Process = None  # type: ignore[assignment,misc]
     Task = None  # type: ignore[assignment,misc]
-    ChatOpenAI = None  # type: ignore[assignment,misc]
+    ChatGoogleGenerativeAI = None  # type: ignore[assignment,misc]
     logger.warning(
-        "crewai / langchain_openai not installed. Install with: "
-        "pip install crewai langchain-openai"
+        "crewai / langchain-google-genai not installed. Install with: "
+        "pip install crewai langchain-google-genai"
     )
 
 
@@ -69,28 +78,46 @@ class MarketContext(BaseModel):
     timeframe: str = Field(default="1h")
 
 
+class AiAnalyzeRequest(BaseModel):
+    """POST /api/ai/analyze request body."""
+
+    symbol: str = Field(description="Trading pair e.g. BTCUSDT")
+    timeframe: str = Field(default="1h")
+
+
 # ---------------------------------------------------------------------------
 # Agent Definitions
 # ---------------------------------------------------------------------------
 
 def _build_llm() -> Any:
-    """Build LLM client from environment — supports OpenAI or Anthropic-via-OpenAI-proxy."""
-    if ChatOpenAI is None:
-        raise RuntimeError("langchain_openai not installed")
+    """Build Google Gemini LLM client from environment.
 
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
-    base_url = os.getenv("LLM_BASE_URL")
-    model = os.getenv("LLM_MODEL", "gpt-4o-mini")
+    Requires GEMINI_API_KEY env var. Never logs the key.
+    """
+    if ChatGoogleGenerativeAI is None:
+        raise RuntimeError(
+            "langchain-google-genai not installed. "
+            "Run: pip install crewai langchain-google-genai"
+        )
 
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "temperature": 0.2,
-        "api_key": api_key,
-    }
-    if base_url:
-        kwargs["base_url"] = base_url
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY environment variable is not set. "
+            "Add it to GitHub Secrets and deploy via SSM."
+        )
 
-    return ChatOpenAI(**kwargs)
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+
+    # Log model name only — NEVER log the API key.
+    logger.info("Initializing Gemini LLM: model=%s", model)
+
+    return ChatGoogleGenerativeAI(
+        model=model,
+        google_api_key=api_key,
+        temperature=0.2,
+        convert_system_message_to_human=True,
+    )
 
 
 def _quant_analyst_agent(llm: Any) -> Any:
@@ -239,11 +266,11 @@ def _build_tasks(
 def run_trading_crew(market: MarketContext) -> TradeDecision:
     """Execute the 3-agent CrewAI pipeline and return a structured TradeDecision.
 
-    Raises RuntimeError if crewai is not installed or LLM key is missing.
+    Raises RuntimeError if crewai is not installed or GEMINI_API_KEY is missing.
     """
-    if Agent is None or Crew is None:
+    if not _CREWAI_AVAILABLE:
         raise RuntimeError(
-            "crewai is not installed. Run: pip install crewai langchain-openai"
+            "crewai is not installed. Run: pip install crewai langchain-google-genai"
         )
 
     llm = _build_llm()
