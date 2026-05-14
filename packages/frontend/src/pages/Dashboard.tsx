@@ -635,21 +635,39 @@ export default function Dashboard() {
     activeChartKeyRef.current = buildChartCacheKey(symbol, timeframe);
   }, [symbol, timeframe]);
 
+  const symbolsControllerRef = useRef<AbortController | null>(null);
+
   const loadSymbols = useCallback(async () => {
     if (!token) {
       return;
     }
 
+    // Cancel any in-flight symbols request to prevent race condition.
+    if (symbolsControllerRef.current) {
+      symbolsControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    symbolsControllerRef.current = controller;
+
     setLoadingSymbols(true);
     setErrorMessage("");
     try {
       const payload = await fetchSymbols();
+
+      // If this request was superseded by a newer one, discard the result.
+      if (controller.signal.aborted) {
+        return;
+      }
+
       const symbolList = payload.length > 0 ? payload : ["BTCUSDT", "ETHUSDT"];
       setSymbols(symbolList);
       if (!symbolList.includes(symbol)) {
         setSymbol(symbolList[0]);
       }
     } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
       setErrorMessage(
         resolveApiErrorMessage(
           error,
@@ -657,7 +675,9 @@ export default function Dashboard() {
         ),
       );
     } finally {
-      setLoadingSymbols(false);
+      if (!controller.signal.aborted) {
+        setLoadingSymbols(false);
+      }
     }
   }, [token, symbol, setLoadingSymbols, setErrorMessage, setSymbols, setSymbol]);
 
@@ -740,7 +760,18 @@ export default function Dashboard() {
         setChartDataReady(true);
         setLastInitialLoadMs(performance.now() - startedAt);
 
-        if (initialSnapshot.length > 0 && initialSnapshot.length < BACKGROUND_HISTORY_TARGET_LIMIT) {
+        // Genesis Block handling: if the API returned fewer candles than
+        // requested (e.g. 1w has only 8 candles), the coin has hit its
+        // genesis — stop lazy-loading older data.
+        if (fastCandles.length < INITIAL_FAST_LOAD_LIMIT) {
+          hasMoreHistoryRef.current = false;
+        }
+
+        if (
+          hasMoreHistoryRef.current &&
+          initialSnapshot.length > 0 &&
+          initialSnapshot.length < BACKGROUND_HISTORY_TARGET_LIMIT
+        ) {
           void hydrateChartHistory(targetSymbol, targetTimeframe, cacheKey, initialSnapshot);
         }
       } catch (error) {
@@ -857,8 +888,11 @@ export default function Dashboard() {
           oldestTimestamp,
         );
 
-        if (olderCandles.length === 0) {
+        const requestedLimit = timeframeOlderPageLimit(timeframe);
+        if (olderCandles.length === 0 || olderCandles.length < requestedLimit) {
           hasMoreHistoryRef.current = false;
+        }
+        if (olderCandles.length === 0) {
           return;
         }
 

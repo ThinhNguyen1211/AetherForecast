@@ -50,13 +50,14 @@ export class Ec2Stack extends Construct {
     });
     corsOriginsParam.overrideLogicalId("CorsOrigins");
 
-    const allowCidrParam = new CfnParameter(this, "AllowCidr", {
+    const originVerifySecretParam = new CfnParameter(this, "OriginVerifySecret", {
       type: "String",
-      default: "0.0.0.0/0",
+      noEcho: true,
+      default: "change-me-to-a-random-secret",
       description:
-        "CIDR allowed to access backend 80/443. 0.0.0.0/0 is temporary for testing.",
+        "Shared secret for X-Aether-Origin-Secret header. CloudFront sends this; Caddy verifies it.",
     });
-    allowCidrParam.overrideLogicalId("AllowCidr");
+    originVerifySecretParam.overrideLogicalId("OriginVerifySecret");
 
     const ec2InstanceTypeParam = new CfnParameter(this, "BackendEc2InstanceType", {
       type: "String",
@@ -77,18 +78,23 @@ export class Ec2Stack extends Construct {
     this.securityGroup = new ec2.SecurityGroup(this, "BackendEc2SecurityGroup", {
       vpc: props.vpc,
       allowAllOutbound: true,
-      description: "Security group for single EC2 backend host",
+      description: "Security group for single EC2 backend host — only CloudFront origin-facing HTTPS",
     });
 
-    this.securityGroup.addIngressRule(
-      ec2.Peer.ipv4(allowCidrParam.valueAsString),
-      ec2.Port.tcp(80),
-      "Allow HTTP from AllowCidr (temporary for testing)",
+    // Allow HTTPS (443) only from CloudFront Managed Prefix List.
+    // No port 22 (use SSM Session Manager), no port 80 (Caddy redirects internally).
+    const cfPrefixList = ec2.Peer.prefixList(
+      ec2.PrefixList.fromPrefixListId(
+        this,
+        "CloudFrontPrefixList",
+        "pl-3b927c52", // com.amazonaws.global.cloudfront.origin-facing
+      ).prefixListId,
     );
+
     this.securityGroup.addIngressRule(
-      ec2.Peer.ipv4(allowCidrParam.valueAsString),
+      cfPrefixList,
       ec2.Port.tcp(443),
-      "Allow HTTPS from AllowCidr (temporary for testing)",
+      "Allow HTTPS from CloudFront origin-facing prefix list only",
     );
 
     this.backendLogGroup = new logs.LogGroup(this, "Ec2BackendLogGroup", {
@@ -198,7 +204,7 @@ export class Ec2Stack extends Construct {
       "/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a stop || true",
       "systemctl enable amazon-cloudwatch-agent",
       "/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s",
-      `cat > /opt/aetherforecast/.env <<'EOF'\nAPP_ENV=prod\nLOG_LEVEL=INFO\nPORT=8000\nUVICORN_WORKERS=1\nAWS_REGION=${stackRegion}\nDATA_BUCKET=${props.parquetDataBucket.bucketName}\nMODEL_BUCKET=${props.mlModelBucket.bucketName}\nMODEL_S3_URI=s3://${props.mlModelBucket.bucketName}/chronos-v1/model/\nREQUIRE_S3_MODEL=true\nCOGNITO_USER_POOL_ID=${props.cognitoUserPoolId}\nCOGNITO_CLIENT_ID=${props.cognitoClientId}\nCOGNITO_REGION=${stackRegion}\nCORS_ORIGINS=${corsOriginsParam.valueAsString}\nAPP_DOMAIN=${apiDomainParam.valueAsString}\nLETSENCRYPT_EMAIL=${letsEncryptEmailParam.valueAsString}\nPARQUET_PREFIX=market/klines\nSYMBOLS=\nKLINE_INTERVAL=1m\nFETCH_CONCURRENCY=24\nFETCH_SYMBOL_LIMIT=0\nMAX_KLINE_PAGES=2\nBOOTSTRAP_LOOKBACK_MINUTES=180\nFETCH_LOOP_SECONDS=0\nSENTIMENT_MODE=simple\nEXTERNAL_SENTIMENT_ENABLED=true\nEOF`,
+      `cat > /opt/aetherforecast/.env <<'EOF'\nAPP_ENV=prod\nLOG_LEVEL=INFO\nPORT=8000\nUVICORN_WORKERS=1\nAWS_REGION=${stackRegion}\nDATA_BUCKET=${props.parquetDataBucket.bucketName}\nMODEL_BUCKET=${props.mlModelBucket.bucketName}\nMODEL_S3_URI=s3://${props.mlModelBucket.bucketName}/chronos-v1/model/\nREQUIRE_S3_MODEL=true\nCOGNITO_USER_POOL_ID=${props.cognitoUserPoolId}\nCOGNITO_CLIENT_ID=${props.cognitoClientId}\nCOGNITO_REGION=${stackRegion}\nCORS_ORIGINS=${corsOriginsParam.valueAsString}\nAPP_DOMAIN=${apiDomainParam.valueAsString}\nLETSENCRYPT_EMAIL=${letsEncryptEmailParam.valueAsString}\nORIGIN_VERIFY_SECRET=${originVerifySecretParam.valueAsString}\nPARQUET_PREFIX=market/klines\nSYMBOLS=\nKLINE_INTERVAL=1m\nFETCH_CONCURRENCY=24\nFETCH_SYMBOL_LIMIT=0\nMAX_KLINE_PAGES=2\nBOOTSTRAP_LOOKBACK_MINUTES=180\nFETCH_LOOP_SECONDS=0\nSENTIMENT_MODE=simple\nEXTERNAL_SENTIMENT_ENABLED=true\nEOF`,
       `BACKEND_IMAGE_URI='${backendImageUriParam.valueAsString}'`,
       "ECR_REGISTRY=$(echo \"$BACKEND_IMAGE_URI\" | cut -d'/' -f1)",
       [
@@ -253,9 +259,7 @@ export class Ec2Stack extends Construct {
       value: corsOriginsParam.valueAsString,
     });
 
-    new CfnOutput(this, "Ec2BackendAllowCidr", {
-      value: allowCidrParam.valueAsString,
-    });
+
 
     new CfnOutput(this, "Ec2BackendInstanceType", {
       value: ec2InstanceTypeParam.valueAsString,

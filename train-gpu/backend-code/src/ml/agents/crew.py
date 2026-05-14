@@ -1,0 +1,288 @@
+"""CrewAI Multi-Agent Trading Decision System.
+
+3 agents: Quant Analyst, Risk Manager, Execution Judge.
+Input: market JSON (price, forecast, volatility, sentiment).
+Output: TradeDecision Pydantic schema (LONG/SHORT/HOLD + entry/SL/TP/leverage/reasoning).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+try:
+    from crewai import Agent, Crew, Process, Task
+    from langchain_openai import ChatOpenAI
+except ImportError:
+    Agent = None  # type: ignore[assignment,misc]
+    Crew = None  # type: ignore[assignment,misc]
+    Process = None  # type: ignore[assignment,misc]
+    Task = None  # type: ignore[assignment,misc]
+    ChatOpenAI = None  # type: ignore[assignment,misc]
+    logger.warning(
+        "crewai / langchain_openai not installed. Install with: "
+        "pip install crewai langchain-openai"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pydantic Schemas
+# ---------------------------------------------------------------------------
+
+class TradeAction(str, Enum):
+    LONG = "LONG"
+    SHORT = "SHORT"
+    HOLD = "HOLD"
+
+
+class TradeDecision(BaseModel):
+    """Final trading decision output from the CrewAI pipeline."""
+
+    action: TradeAction = Field(description="LONG, SHORT, or HOLD")
+    entry: float = Field(description="Suggested entry price (0 if HOLD)")
+    leverage: int = Field(ge=1, le=125, description="Leverage multiplier (1 = spot)")
+    stop_loss: float = Field(description="Stop-loss price (0 if HOLD)")
+    take_profit: float = Field(description="Take-profit price (0 if HOLD)")
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence score [0,1]")
+    reasoning: str = Field(description="Concise human-readable rationale")
+
+
+class MarketContext(BaseModel):
+    """Input context for the CrewAI pipeline."""
+
+    symbol: str = Field(description="Trading pair e.g. BTCUSDT")
+    current_price: float
+    forecast_median: float = Field(description="Chronos-2 median forecast price")
+    forecast_lower: float = Field(description="P5 lower band")
+    forecast_upper: float = Field(description="P95 upper band")
+    realized_volatility: float = Field(description="Realized vol of last 50 candles")
+    sentiment_score: float = Field(ge=-1.0, le=1.0, description="Blended sentiment [-1,1]")
+    funding_rate: float = Field(default=0.0, description="Current funding rate")
+    fear_greed_index: float = Field(default=50.0, ge=0.0, le=100.0)
+    timeframe: str = Field(default="1h")
+
+
+# ---------------------------------------------------------------------------
+# Agent Definitions
+# ---------------------------------------------------------------------------
+
+def _build_llm() -> Any:
+    """Build LLM client from environment — supports OpenAI or Anthropic-via-OpenAI-proxy."""
+    if ChatOpenAI is None:
+        raise RuntimeError("langchain_openai not installed")
+
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
+    base_url = os.getenv("LLM_BASE_URL")
+    model = os.getenv("LLM_MODEL", "gpt-4o-mini")
+
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "temperature": 0.2,
+        "api_key": api_key,
+    }
+    if base_url:
+        kwargs["base_url"] = base_url
+
+    return ChatOpenAI(**kwargs)
+
+
+def _quant_analyst_agent(llm: Any) -> Any:
+    """Reads technical data + Chronos-2 forecast, outputs directional bias."""
+    return Agent(
+        role="Quant Analyst",
+        goal=(
+            "Analyze technical indicators, Chronos-2 forecast bands, and realized "
+            "volatility to determine a directional bias (LONG/SHORT/NEUTRAL) with "
+            "confidence score and optimal entry/exit levels."
+        ),
+        backstory=(
+            "You are a senior quantitative analyst at a top crypto hedge fund. "
+            "You specialize in statistical forecasting models and technical analysis. "
+            "You are precise, data-driven, and never guess."
+        ),
+        llm=llm,
+        verbose=False,
+        allow_delegation=False,
+    )
+
+
+def _risk_manager_agent(llm: Any) -> Any:
+    """Reads sentiment, funding rate, FnG — can veto or reduce exposure."""
+    return Agent(
+        role="Risk Manager",
+        goal=(
+            "Evaluate market risk using sentiment, funding rate, and fear/greed index. "
+            "Determine if the proposed trade should be blocked, reduced, or approved. "
+            "Set appropriate leverage and stop-loss levels."
+        ),
+        backstory=(
+            "You are the Chief Risk Officer of a crypto trading desk. "
+            "Your job is to protect capital. You are conservative and skeptical. "
+            "If sentiment is extreme or funding rate signals crowded positioning, "
+            "you reduce leverage or veto the trade entirely."
+        ),
+        llm=llm,
+        verbose=False,
+        allow_delegation=False,
+    )
+
+
+def _execution_judge_agent(llm: Any) -> Any:
+    """Final arbiter — synthesizes Quant + Risk into a single TradeDecision."""
+    return Agent(
+        role="Execution Judge",
+        goal=(
+            "Synthesize the Quant Analyst's directional signal and the Risk Manager's "
+            "risk assessment into a final trade decision. Output a single JSON object "
+            "with action, entry, leverage, stop_loss, take_profit, confidence, reasoning."
+        ),
+        backstory=(
+            "You are the Head of Execution at a systematic trading firm. "
+            "You make the final call. You balance opportunity against risk. "
+            "Your output must be precise, actionable, and in valid JSON format."
+        ),
+        llm=llm,
+        verbose=False,
+        allow_delegation=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task Pipeline
+# ---------------------------------------------------------------------------
+
+def _build_tasks(
+    quant: Any,
+    risk: Any,
+    judge: Any,
+    market: MarketContext,
+) -> list[Any]:
+    """Create the 3-step task pipeline."""
+    market_json = market.model_dump_json(indent=2)
+
+    quant_task = Task(
+        description=(
+            f"Analyze the following market data and Chronos-2 forecast:\n\n"
+            f"```json\n{market_json}\n```\n\n"
+            "Provide:\n"
+            "1. Directional bias: LONG, SHORT, or NEUTRAL\n"
+            "2. Confidence score (0-1)\n"
+            "3. Suggested entry price\n"
+            "4. Initial stop-loss and take-profit levels\n"
+            "5. Brief technical reasoning (2-3 sentences)\n\n"
+            "Consider the forecast bands (P5-P95), current price relative to forecast median, "
+            "and realized volatility for position sizing."
+        ),
+        expected_output=(
+            "JSON with keys: bias, confidence, entry, stop_loss, take_profit, reasoning"
+        ),
+        agent=quant,
+    )
+
+    risk_task = Task(
+        description=(
+            "Review the Quant Analyst's trade proposal against risk factors:\n\n"
+            f"Market context:\n```json\n{market_json}\n```\n\n"
+            "Evaluate:\n"
+            "1. Sentiment score: extreme values (> 0.7 or < -0.7) signal caution\n"
+            "2. Funding rate: high positive = crowded longs, high negative = crowded shorts\n"
+            "3. Fear/Greed Index: extreme fear (< 20) or extreme greed (> 80) = caution\n"
+            "4. Realized volatility: high vol = reduce leverage\n\n"
+            "Output: approved/reduced/vetoed, adjusted leverage (1-20), adjusted stop-loss, reasoning"
+        ),
+        expected_output=(
+            "JSON with keys: verdict (approved/reduced/vetoed), leverage, stop_loss, reasoning"
+        ),
+        agent=risk,
+        context=[quant_task],
+    )
+
+    judge_task = Task(
+        description=(
+            "You have the Quant Analyst's signal and the Risk Manager's assessment. "
+            "Make the final trade decision.\n\n"
+            "Output EXACTLY this JSON structure (no markdown, no explanation outside JSON):\n"
+            '{\n'
+            '  "action": "LONG" | "SHORT" | "HOLD",\n'
+            '  "entry": <float>,\n'
+            '  "leverage": <int 1-125>,\n'
+            '  "stop_loss": <float>,\n'
+            '  "take_profit": <float>,\n'
+            '  "confidence": <float 0-1>,\n'
+            '  "reasoning": "<concise string>"\n'
+            "}\n\n"
+            "Rules:\n"
+            "- If Risk Manager vetoed, action MUST be HOLD with entry/SL/TP = 0\n"
+            "- If reduced, apply the Risk Manager's leverage and stop-loss adjustments\n"
+            "- Confidence reflects your conviction after both analyses\n"
+            "- Reasoning should be 1-2 sentences max"
+        ),
+        expected_output="A single valid JSON object matching the TradeDecision schema.",
+        agent=judge,
+        context=[quant_task, risk_task],
+    )
+
+    return [quant_task, risk_task, judge_task]
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def run_trading_crew(market: MarketContext) -> TradeDecision:
+    """Execute the 3-agent CrewAI pipeline and return a structured TradeDecision.
+
+    Raises RuntimeError if crewai is not installed or LLM key is missing.
+    """
+    if Agent is None or Crew is None:
+        raise RuntimeError(
+            "crewai is not installed. Run: pip install crewai langchain-openai"
+        )
+
+    llm = _build_llm()
+
+    quant = _quant_analyst_agent(llm)
+    risk = _risk_manager_agent(llm)
+    judge = _execution_judge_agent(llm)
+
+    tasks = _build_tasks(quant, risk, judge, market)
+
+    crew = Crew(
+        agents=[quant, risk, judge],
+        tasks=tasks,
+        process=Process.sequential,
+        verbose=False,
+    )
+
+    logger.info("Running CrewAI trading pipeline for %s @ %s", market.symbol, market.timeframe)
+    result = crew.kickoff()
+
+    # Parse the judge's final output into TradeDecision.
+    raw_output = str(result)
+    try:
+        json_start = raw_output.find("{")
+        json_end = raw_output.rfind("}") + 1
+        if json_start >= 0 and json_end > json_start:
+            parsed = json.loads(raw_output[json_start:json_end])
+        else:
+            parsed = json.loads(raw_output)
+
+        return TradeDecision(**parsed)
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("Failed to parse CrewAI output: %s | raw: %s", exc, raw_output[:500])
+        return TradeDecision(
+            action=TradeAction.HOLD,
+            entry=0.0,
+            leverage=1,
+            stop_loss=0.0,
+            take_profit=0.0,
+            confidence=0.0,
+            reasoning=f"CrewAI output parsing failed: {exc}",
+        )

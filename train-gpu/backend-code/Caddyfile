@@ -4,6 +4,15 @@
 
 # Set APP_DOMAIN=:80 for HTTP-only bootstrap, or a DNS hostname for automatic HTTPS.
 {$APP_DOMAIN::80} {
+  # Verify CloudFront origin secret on every request.
+  # Requests without a valid X-Aether-Origin-Secret header are blocked with 403.
+  @missingOriginSecret {
+    not header X-Aether-Origin-Secret {$ORIGIN_VERIFY_SECRET}
+  }
+  handle @missingOriginSecret {
+    respond "Forbidden" 403
+  }
+
   encode zstd gzip
   reverse_proxy 127.0.0.1:{$PORT:8000}
 }
