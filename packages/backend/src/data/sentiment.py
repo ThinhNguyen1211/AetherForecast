@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import logging
 import math
 import re
 import threading
 import xml.etree.ElementTree as et
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus
 
 import httpx

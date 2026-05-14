@@ -23,8 +23,8 @@ from src.ml.agents.crew import (
 from src.ml.inference import ForecastInferenceService, get_inference_service
 from src.ml.schemas import Candle, PredictRequest
 
-router = APIRouter(prefix="/api/ai", tags=["ai-council"])
 logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/ai", tags=["ai-council"])
 
 _HISTORY_LIMIT = 1500
 _FORECAST_HORIZON = 24

@@ -1,9 +1,9 @@
-from datetime import datetime, timezone
-from functools import lru_cache
 import logging
 import math
 import re
 import time
+from datetime import datetime, timezone
+from functools import lru_cache
 from statistics import pstdev
 from typing import Any
 

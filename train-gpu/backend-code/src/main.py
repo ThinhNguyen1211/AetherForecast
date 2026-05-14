@@ -8,7 +8,7 @@ from src.core.config import get_settings
 from src.core.logging import configure_logging
 from src.core.metrics import put_custom_metrics
 from src.realtime.websocket import get_realtime_hub
-from src.routers import chart, health, predict, realtime, symbols
+from src.routers import ai_council, chart, health, predict, realtime, symbols
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -85,3 +85,4 @@ app.include_router(symbols.router)
 app.include_router(chart.router)
 app.include_router(predict.router)
 app.include_router(realtime.router)
+app.include_router(ai_council.router)

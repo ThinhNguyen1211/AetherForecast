@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends
 import httpx
+from fastapi import APIRouter, Depends
 
 from src.core.config import get_settings
 from src.dependencies.cognito import require_authenticated_user

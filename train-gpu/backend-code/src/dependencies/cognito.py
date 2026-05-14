@@ -1,5 +1,5 @@
-from functools import lru_cache
 import time
+from functools import lru_cache
 from typing import Any
 
 import requests
@@ -8,7 +8,6 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from src.core.config import Settings, get_settings
-
 
 bearer_scheme = HTTPBearer(auto_error=False)
 

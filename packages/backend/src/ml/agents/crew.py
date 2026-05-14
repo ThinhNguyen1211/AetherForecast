@@ -14,12 +14,11 @@ import os
 from enum import Enum
 from typing import Any
 
+from crewai import Agent, Crew, Process, Task
+from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
-
-from crewai import Agent, Crew, Process, Task
-from langchain_google_genai import ChatGoogleGenerativeAI
 
 # ---------------------------------------------------------------------------
 # Pydantic Schemas

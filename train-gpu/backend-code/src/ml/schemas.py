@@ -3,7 +3,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 SupportedTimeframe = Literal["1m", "5m", "15m", "1h", "4h", "1d", "1w"]
 
 

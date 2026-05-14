@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 import tempfile
+from pathlib import Path
 from uuid import uuid4
 
 import boto3
