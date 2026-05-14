@@ -8,6 +8,7 @@
   # Requests without a valid X-Aether-Origin-Secret header are blocked with 403.
   @missing_secret {
     not header X-Aether-Origin-Secret "{$ORIGIN_VERIFY_SECRET}"
+    not method OPTIONS
   }
   respond @missing_secret "Forbidden" 403
 
