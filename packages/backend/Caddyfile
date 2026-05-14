@@ -6,12 +6,10 @@
 {$APP_DOMAIN::80} {
   # Verify CloudFront origin secret on every request.
   # Requests without a valid X-Aether-Origin-Secret header are blocked with 403.
-  @missingOriginSecret {
-    not header X-Aether-Origin-Secret {$ORIGIN_VERIFY_SECRET}
+  @missing_secret {
+    not header X-Aether-Origin-Secret "{$ORIGIN_VERIFY_SECRET}"
   }
-  handle @missingOriginSecret {
-    respond "Forbidden" 403
-  }
+  respond @missing_secret "Forbidden" 403
 
   encode zstd gzip
   reverse_proxy 127.0.0.1:{$PORT:8000}
