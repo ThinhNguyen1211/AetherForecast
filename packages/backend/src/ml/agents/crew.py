@@ -18,28 +18,8 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Optional imports — CrewAI + LangChain Google GenAI
-# ---------------------------------------------------------------------------
-_CREWAI_AVAILABLE = False
-
-try:
-    # pyrefly: ignore [missing-import]
-    from crewai import Agent, Crew, Process, Task  # type: ignore[import-untyped]
-    # pyrefly: ignore [missing-import]
-    from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore[import-untyped]
-    _CREWAI_AVAILABLE = True
-except ImportError:
-    Agent = None  # type: ignore[assignment,misc]
-    Crew = None  # type: ignore[assignment,misc]
-    Process = None  # type: ignore[assignment,misc]
-    Task = None  # type: ignore[assignment,misc]
-    ChatGoogleGenerativeAI = None  # type: ignore[assignment,misc]
-    logger.warning(
-        "crewai / langchain-google-genai not installed. Install with: "
-        "pip install crewai langchain-google-genai"
-    )
-
+from crewai import Agent, Crew, Process, Task
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 # ---------------------------------------------------------------------------
 # Pydantic Schemas
@@ -266,13 +246,8 @@ def _build_tasks(
 def run_trading_crew(market: MarketContext) -> TradeDecision:
     """Execute the 3-agent CrewAI pipeline and return a structured TradeDecision.
 
-    Raises RuntimeError if crewai is not installed or GEMINI_API_KEY is missing.
+    Raises RuntimeError if GEMINI_API_KEY is missing.
     """
-    if not _CREWAI_AVAILABLE:
-        raise RuntimeError(
-            "crewai is not installed. Run: pip install crewai langchain-google-genai"
-        )
-
     llm = _build_llm()
 
     quant = _quant_analyst_agent(llm)

@@ -74,8 +74,8 @@ jobs:
               "docker stop aetherforecast-backend-canary || true",
               "docker rm -f aetherforecast-backend-canary || true",
               "docker run -d --name aetherforecast-backend-canary --restart unless-stopped -p 8080:80 --env-file /opt/aetherforecast/.env -v /opt/aetherforecast/caddy_data:/data -v /opt/aetherforecast/caddy_config:/config ${IMAGE_URI}",
-              "sleep 5",
-              "curl -fsS --max-time 10 http://127.0.0.1:8080/health",
+              "sleep 8",
+              "curl -fsS --max-time 10 http://127.0.0.1:8080/health || { docker logs aetherforecast-backend-canary --tail 50; exit 1; }",
               "docker rm -f aetherforecast-backend-old || true",
               "docker stop aetherforecast-backend || true",
               "docker rename aetherforecast-backend aetherforecast-backend-old || true",
@@ -84,7 +84,7 @@ jobs:
               "docker create --name aetherforecast-backend --restart unless-stopped -p 80:80 -p 443:443 --env-file /opt/aetherforecast/.env -v /opt/aetherforecast/caddy_data:/data -v /opt/aetherforecast/caddy_config:/config ${IMAGE_URI}",
               "docker start aetherforecast-backend",
               "sleep 5",
-              "curl -fsS --max-time 10 http://127.0.0.1/health",
+              "curl -fsS --max-time 10 http://127.0.0.1/health || { docker logs aetherforecast-backend --tail 50; exit 1; }",
               "echo ${IMAGE_URI} > /opt/aetherforecast/backend-image-uri.txt",
               "docker rm -f aetherforecast-backend-old || true"
             ]
