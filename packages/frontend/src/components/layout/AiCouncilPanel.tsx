@@ -77,8 +77,10 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ symbol: symbol, timeframe: timeframe }),
-        signal: controller.signal,
+        body: JSON.stringify({
+          symbol: symbol,
+          timeframe: timeframe,
+        }),
       });
 
       // Handle rate limit
@@ -190,9 +192,9 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
             Agents đang họp chiến lược...
           </span>
         ) : (
-          <span className="flex items-center justify-center gap-2">
-            <img src={logoEye} alt="Aether AI" className="h-4 w-4 opacity-90" />
-            Aether AI Agents: Analyze & Generate Signals
+          <span className="flex items-center justify-center gap-3 w-full">
+            <img src={logoEye} alt="Aether AI" className="w-6 h-6 flex-shrink-0 object-contain opacity-90" />
+            <span>Aether AI Agents: Analyze & Generate Signals</span>
           </span>
         )}
       </button>
