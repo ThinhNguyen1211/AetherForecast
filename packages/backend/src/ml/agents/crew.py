@@ -300,7 +300,7 @@ def run_trading_crew_streaming(
             event_queue.put(f"[{label}] hoàn thành phân tích:\n{raw}")
         except Exception as exc:
             logger.debug("task_callback error (non-fatal): %s", exc)
-            event_queue.put(f"[Agent] completed a task step.")
+            event_queue.put("[Agent] completed a task step.")
 
     def _step_callback(step_output: Any) -> None:
         """Called by CrewAI after each agent step (thought/action)."""
@@ -331,7 +331,7 @@ def run_trading_crew_streaming(
             )
 
             event_queue.put(f"🚀 Khởi động Hội đồng AI cho {market.symbol} @ {market.timeframe}...")
-            event_queue.put(f"📊 Quant Analyst đang phân tích dữ liệu thị trường...")
+            event_queue.put("📊 Quant Analyst đang phân tích dữ liệu thị trường...")
 
             result = crew.kickoff()
             raw_output = str(result)

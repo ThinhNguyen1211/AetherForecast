@@ -1075,69 +1075,7 @@ export default function Dashboard() {
     void checkApi();
   }, [setApiStatus]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
 
-    const resolveRegionalClock = async () => {
-      try {
-        const response = await fetch("https://worldtimeapi.org/api/ip", {
-          signal: controller.signal,
-          cache: "no-store",
-        });
-
-        if (!response.ok) {
-          throw new Error(`worldtimeapi unavailable: ${response.status}`);
-        }
-
-        const payload = (await response.json()) as {
-          timezone?: string;
-          city?: string;
-          region?: string;
-          country_name?: string;
-        };
-
-        if (cancelled) {
-          return;
-        }
-
-        const resolvedTimeZone =
-          typeof payload.timezone === "string" && payload.timezone
-            ? payload.timezone
-            : browserTimeZone;
-
-        const locationParts = [payload.city, payload.region, payload.country_name]
-          .filter((part): part is string => typeof part === "string" && part.length > 0)
-          .slice(0, 2);
-
-        const resolvedLocationLabel =
-          locationParts.length > 0
-            ? `${locationParts.join(", ")} · ${resolvedTimeZone}`
-            : `${resolvedTimeZone} (IP region)`;
-
-        setRegionalClock({
-          timeZone: resolvedTimeZone,
-          locationLabel: resolvedLocationLabel,
-        });
-      } catch {
-        if (cancelled) {
-          return;
-        }
-
-        setRegionalClock({
-          timeZone: browserTimeZone,
-          locationLabel: `${browserTimeZone} (browser)`,
-        });
-      }
-    };
-
-    void resolveRegionalClock();
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [browserTimeZone]);
 
   useEffect(() => {
     void loadSymbols();

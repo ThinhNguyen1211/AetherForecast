@@ -4,12 +4,10 @@
 
 # Set APP_DOMAIN=:80 for HTTP-only bootstrap, or a DNS hostname for automatic HTTPS.
 {$APP_DOMAIN::80} {
-  # Verify CloudFront origin secret on every request.
-  # Requests without a valid X-Aether-Origin-Secret header are blocked with 403.
-  @missing_secret {
-    not header X-Aether-Origin-Secret "{$ORIGIN_VERIFY_SECRET}"
-  }
-  respond @missing_secret "Forbidden" 403
+  # Disable CloudFront Origin Secret check temporarily.
+  # When the API is accessed directly by the browser (or WebSockets),
+  # the custom header is missing, which causes Caddy to block all requests with 403.
+  # Security is still enforced via FastAPI CORSMiddleware and Cognito JWTs.
 
   encode zstd gzip
   reverse_proxy 127.0.0.1:{$PORT:8000}
