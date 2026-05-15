@@ -172,7 +172,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
 
   return (
     <div className="mt-4 rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-4">
-      <p className="muted-label">AI Council</p>
+      <p className="muted-label">AI Agent Team</p>
 
       {/* Ask button */}
       <button

@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -39,7 +39,7 @@ _FORECAST_HORIZON = 24
 @limiter.limit("5/hour")
 async def ai_analyze(
     request: Request,
-    body: AiAnalyzeRequest,
+    payload: AiAnalyzeRequest = Body(...),
     _claims: dict = Depends(require_authenticated_user),
     inference_service: ForecastInferenceService = Depends(get_inference_service),
     s3_client: S3ParquetClient = Depends(get_s3_parquet_client),
@@ -48,8 +48,8 @@ async def ai_analyze(
 
     Returns Server-Sent Events stream with agent reasoning in real-time.
     """
-    symbol = body.symbol.upper().strip()
-    timeframe = body.timeframe or "1h"
+    symbol = payload.symbol.upper().strip()
+    timeframe = payload.timeframe or "1h"
 
     # --- Step 1: Pull latest candles from backend data sources ---
     try:
