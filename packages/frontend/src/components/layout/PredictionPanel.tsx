@@ -111,6 +111,10 @@ export default function PredictionPanel({
           : "Generate prediction"}
       </button>
 
+      <div className="mb-3">
+        <AiCouncilPanel symbol={symbol} timeframe={timeframe} hasPrediction={prediction !== null} />
+      </div>
+
       {loading && predictionProgress.length > 0 && (
         <div className="mt-3 rounded-xl border border-cyan-300/35 bg-gradient-to-r from-cyan-500/10 via-violet-500/10 to-cosmic-900/65 p-3">
           <p className="muted-label">Prediction Pipeline</p>
@@ -184,7 +188,6 @@ export default function PredictionPanel({
         </p>
       </div>
 
-      <AiCouncilPanel symbol={symbol} timeframe={timeframe} hasPrediction={prediction !== null} />
 
     </section>
   );

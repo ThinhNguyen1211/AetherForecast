@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { getAuthToken, Timeframe, TradeAction, AiCouncilDecision } from "@/services/api";
+import logoEye from "@/assets/logo-eye.svg";
 
 interface AiCouncilPanelProps {
   symbol: string;
@@ -76,7 +77,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ symbol, timeframe }),
+        body: JSON.stringify({ symbol: symbol, timeframe: timeframe }),
         signal: controller.signal,
       });
 
@@ -189,7 +190,10 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
             Agents đang họp chiến lược...
           </span>
         ) : (
-          "🔮 Aether Agents: Phân tích chiến lược"
+          <span className="flex items-center justify-center gap-2">
+            <img src={logoEye} alt="Aether AI" className="h-4 w-4 opacity-90" />
+            Aether AI Agents: Analyze & Generate Signals
+          </span>
         )}
       </button>
       {!hasPrediction && !loading && (
