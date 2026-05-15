@@ -26,3 +26,4 @@ pyarrow==20.0.0
 torch==2.8.0+cpu
 crewai>=0.28.0
 langchain-google-genai>=1.0.3
+slowapi>=0.1.9

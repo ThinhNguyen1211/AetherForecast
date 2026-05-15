@@ -184,7 +184,7 @@ export default function PredictionPanel({
         </p>
       </div>
 
-      <AiCouncilPanel symbol={symbol} timeframe={timeframe} />
+      <AiCouncilPanel symbol={symbol} timeframe={timeframe} hasPrediction={prediction !== null} />
 
     </section>
   );

@@ -1,9 +1,12 @@
-"""CrewAI Multi-Agent Trading Decision System.
+"""CrewAI Multi-Agent Trading Decision System (Streaming).
 
 3 agents: Quant Analyst, Risk Manager, Execution Judge.
 Input: market JSON (price, forecast, volatility, sentiment).
 Output: TradeDecision Pydantic schema (LONG/SHORT/HOLD + entry/SL/TP/leverage/reasoning).
 LLM: Google Gemini via langchain-google-genai (configurable via GEMINI_API_KEY env).
+
+Supports streaming via `run_trading_crew_streaming()` which yields SSE events
+in real-time as each agent produces output.
 """
 
 from __future__ import annotations
@@ -11,8 +14,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from enum import Enum
-from typing import Any
+from queue import Empty, Queue
+from typing import Any, Generator
 
 from crewai import Agent, Crew, Process, Task
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -73,12 +78,6 @@ def _build_llm() -> Any:
 
     Requires GEMINI_API_KEY env var. Never logs the key.
     """
-    if ChatGoogleGenerativeAI is None:
-        raise RuntimeError(
-            "langchain-google-genai not installed. "
-            "Run: pip install crewai langchain-google-genai"
-        )
-
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         raise RuntimeError(
@@ -239,7 +238,138 @@ def _build_tasks(
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Parse final output
+# ---------------------------------------------------------------------------
+
+def _parse_trade_decision(raw_output: str) -> TradeDecision:
+    """Parse CrewAI's raw text output into a TradeDecision."""
+    try:
+        json_start = raw_output.find("{")
+        json_end = raw_output.rfind("}") + 1
+        if json_start >= 0 and json_end > json_start:
+            parsed = json.loads(raw_output[json_start:json_end])
+        else:
+            parsed = json.loads(raw_output)
+
+        return TradeDecision(**parsed)
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("Failed to parse CrewAI output: %s | raw: %s", exc, raw_output[:500])
+        return TradeDecision(
+            action=TradeAction.HOLD,
+            entry=0.0,
+            leverage=1,
+            stop_loss=0.0,
+            take_profit=0.0,
+            confidence=0.0,
+            reasoning=f"CrewAI output parsing failed: {exc}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Streaming Public API
+# ---------------------------------------------------------------------------
+
+_AGENT_LABELS = {
+    "Quant Analyst": "📊 Quant Analyst",
+    "Risk Manager": "🛡️ Risk Manager",
+    "Execution Judge": "⚖️ Execution Judge",
+}
+
+_SENTINEL = object()
+
+
+def run_trading_crew_streaming(
+    market: MarketContext,
+) -> Generator[str, None, None]:
+    """Execute the 3-agent CrewAI pipeline, yielding SSE events as agents work.
+
+    Yields:
+        SSE-formatted strings (`data: ...\n\n`).
+        The final event contains `[FINAL_RESULT]:<json>` for the TradeDecision.
+    """
+    event_queue: Queue[str | object] = Queue()
+
+    def _task_callback(task_output: Any) -> None:
+        """Called by CrewAI after each task completes."""
+        try:
+            agent_name = getattr(task_output, "agent", "")
+            if hasattr(agent_name, "role"):
+                agent_name = agent_name.role
+            label = _AGENT_LABELS.get(str(agent_name), str(agent_name))
+            raw = getattr(task_output, "raw", str(task_output))
+            event_queue.put(f"[{label}] hoàn thành phân tích:\n{raw}")
+        except Exception as exc:
+            logger.debug("task_callback error (non-fatal): %s", exc)
+            event_queue.put(f"[Agent] completed a task step.")
+
+    def _step_callback(step_output: Any) -> None:
+        """Called by CrewAI after each agent step (thought/action)."""
+        try:
+            text = getattr(step_output, "text", None) or str(step_output)
+            # Only forward meaningful text, skip very short internal chatter
+            if len(text.strip()) > 10:
+                event_queue.put(f"💭 {text[:600]}")
+        except Exception:
+            pass
+
+    def _run_crew() -> None:
+        """Background thread: runs the blocking CrewAI pipeline."""
+        try:
+            llm = _build_llm()
+            quant = _quant_analyst_agent(llm)
+            risk = _risk_manager_agent(llm)
+            judge = _execution_judge_agent(llm)
+            tasks = _build_tasks(quant, risk, judge, market)
+
+            crew = Crew(
+                agents=[quant, risk, judge],
+                tasks=tasks,
+                process=Process.sequential,
+                verbose=False,
+                task_callback=_task_callback,
+                step_callback=_step_callback,
+            )
+
+            event_queue.put(f"🚀 Khởi động Hội đồng AI cho {market.symbol} @ {market.timeframe}...")
+            event_queue.put(f"📊 Quant Analyst đang phân tích dữ liệu thị trường...")
+
+            result = crew.kickoff()
+            raw_output = str(result)
+            decision = _parse_trade_decision(raw_output)
+            decision_json = decision.model_dump_json()
+
+            event_queue.put(f"[FINAL_RESULT]:{decision_json}")
+        except Exception as exc:
+            logger.exception("CrewAI streaming pipeline error")
+            event_queue.put(f"[ERROR]:{exc}")
+        finally:
+            event_queue.put(_SENTINEL)
+
+    # Start the blocking crew in a background thread
+    thread = threading.Thread(target=_run_crew, daemon=True)
+    thread.start()
+
+    # Yield SSE events as they arrive from the queue
+    while True:
+        try:
+            item = event_queue.get(timeout=120)
+        except Empty:
+            # Keep-alive to prevent proxy/client timeout
+            yield "data: [KEEPALIVE]\n\n"
+            continue
+
+        if item is _SENTINEL:
+            break
+
+        message = str(item)
+        # SSE format: each line prefixed with "data: ", double newline to end event
+        for line in message.split("\n"):
+            yield f"data: {line}\n"
+        yield "\n"
+
+
+# ---------------------------------------------------------------------------
+# Legacy synchronous API (kept for backwards compat / tests)
 # ---------------------------------------------------------------------------
 
 def run_trading_crew(market: MarketContext) -> TradeDecision:
@@ -265,25 +395,4 @@ def run_trading_crew(market: MarketContext) -> TradeDecision:
     logger.info("Running CrewAI trading pipeline for %s @ %s", market.symbol, market.timeframe)
     result = crew.kickoff()
 
-    # Parse the judge's final output into TradeDecision.
-    raw_output = str(result)
-    try:
-        json_start = raw_output.find("{")
-        json_end = raw_output.rfind("}") + 1
-        if json_start >= 0 and json_end > json_start:
-            parsed = json.loads(raw_output[json_start:json_end])
-        else:
-            parsed = json.loads(raw_output)
-
-        return TradeDecision(**parsed)
-    except (json.JSONDecodeError, ValueError) as exc:
-        logger.warning("Failed to parse CrewAI output: %s | raw: %s", exc, raw_output[:500])
-        return TradeDecision(
-            action=TradeAction.HOLD,
-            entry=0.0,
-            leverage=1,
-            stop_loss=0.0,
-            take_profit=0.0,
-            confidence=0.0,
-            reasoning=f"CrewAI output parsing failed: {exc}",
-        )
+    return _parse_trade_decision(str(result))

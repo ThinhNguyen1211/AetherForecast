@@ -1,8 +1,10 @@
-"""POST /api/ai/analyze — CrewAI multi-agent trading analysis endpoint.
+"""POST /api/ai/analyze — CrewAI multi-agent trading analysis (SSE streaming).
 
 Pulls latest candles + Chronos-2 forecast + sentiment for the given symbol,
 then runs the 3-agent CrewAI pipeline (Quant → Risk → Judge).
-Returns a TradeDecision with Action, Entry, Leverage, SL, TP, Reasoning.
+Streams agent thoughts in real-time via Server-Sent Events.
+Final event contains [FINAL_RESULT]:<TradeDecision JSON>.
+Rate limited to 5 requests per hour per IP.
 """
 
 from __future__ import annotations
@@ -10,34 +12,42 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from src.dependencies.cognito import require_authenticated_user
 from src.dependencies.s3_client import S3ParquetClient, get_s3_parquet_client
 from src.ml.agents.crew import (
     AiAnalyzeRequest,
     MarketContext,
-    TradeDecision,
-    run_trading_crew,
+    run_trading_crew_streaming,
 )
 from src.ml.inference import ForecastInferenceService, get_inference_service
 from src.ml.schemas import Candle, PredictRequest
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai-council"])
+limiter = Limiter(key_func=get_remote_address)
 
 _HISTORY_LIMIT = 1500
 _FORECAST_HORIZON = 24
 
 
-@router.post("/analyze", response_model=TradeDecision)
-def ai_analyze(
+@router.post("/analyze")
+@limiter.limit("5/hour")
+async def ai_analyze(
+    request: Request,
     body: AiAnalyzeRequest,
     _claims: dict = Depends(require_authenticated_user),
     inference_service: ForecastInferenceService = Depends(get_inference_service),
     s3_client: S3ParquetClient = Depends(get_s3_parquet_client),
-) -> TradeDecision:
-    """Run CrewAI 3-agent council on the current market state for a symbol."""
+) -> StreamingResponse:
+    """Run CrewAI 3-agent council on the current market state for a symbol.
+
+    Returns Server-Sent Events stream with agent reasoning in real-time.
+    """
     symbol = body.symbol.upper().strip()
     timeframe = body.timeframe or "1h"
 
@@ -102,26 +112,14 @@ def ai_analyze(
         timeframe=timeframe,
     )
 
-    # --- Step 4: Run CrewAI pipeline ---
-    try:
-        decision = run_trading_crew(market_context)
-        logger.info(
-            "AI Council decision for %s: action=%s confidence=%.2f",
-            symbol,
-            decision.action,
-            decision.confidence,
-        )
-        return decision
-    except RuntimeError as exc:
-        # CrewAI not installed or GEMINI_API_KEY missing
-        logger.warning("CrewAI runtime error: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(exc),
-        ) from exc
-    except Exception as exc:
-        logger.exception("Unexpected error in AI analysis pipeline")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="AI analysis pipeline failed unexpectedly",
-        ) from exc
+    # --- Step 4: Stream CrewAI pipeline via SSE ---
+    logger.info("Starting SSE streaming AI analysis for %s @ %s", symbol, timeframe)
+
+    return StreamingResponse(
+        run_trading_crew_streaming(market_context),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

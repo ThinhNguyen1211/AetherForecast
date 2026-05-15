@@ -554,7 +554,7 @@ export function connectRealtimeKline(
 }
 
 // ---------------------------------------------------------------------------
-// AI Council (CrewAI)
+// AI Council (CrewAI) — Types only; streaming is handled directly in component.
 // ---------------------------------------------------------------------------
 
 export type TradeAction = "LONG" | "SHORT" | "HOLD";
@@ -567,15 +567,4 @@ export interface AiCouncilDecision {
   take_profit: number;
   confidence: number;
   reasoning: string;
-}
-
-export async function fetchAiCouncil(
-  symbol: string,
-  timeframe: Timeframe,
-): Promise<AiCouncilDecision> {
-  const response = await api.post<AiCouncilDecision>("/api/ai/analyze", {
-    symbol,
-    timeframe,
-  });
-  return response.data;
 }
