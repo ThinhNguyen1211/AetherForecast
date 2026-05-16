@@ -15,20 +15,7 @@ const ACTION_STYLES: Record<TradeAction, { badge: string; label: string }> = {
   HOLD: { badge: "bg-zinc-500/20 text-zinc-300 border-zinc-400/50", label: "HOLD" },
 };
 
-function resolveApiBaseUrl(): string {
-  const configured = import.meta.env.VITE_API_BASE_URL?.trim();
-  if (configured) {
-    return configured;
-  }
-  if (typeof window !== "undefined") {
-    const hostname = window.location.hostname;
-    if (hostname === "localhost" || hostname === "127.0.0.1") {
-      return "http://localhost:8000";
-    }
-    return `${window.location.protocol}//${window.location.hostname}`;
-  }
-  return "http://localhost:8000";
-}
+
 
 export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiCouncilPanelProps) {
   const [loading, setLoading] = useState(false);
@@ -70,8 +57,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
     }
 
     try {
-      const baseUrl = resolveApiBaseUrl();
-      const response = await fetch(`${baseUrl}/api/ai/analyze`, {
+      const response = await fetch('/api/ai/analyze', {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -85,7 +71,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
 
       // Handle rate limit
       if (response.status === 429) {
-        setError("⏳ Hội đồng đang nghỉ ngơi, vui lòng thử lại sau (giới hạn 5 lần/giờ).");
+        setError("⏳ The agents are resting, please try again later (limit 5 requests/hour).");
         setLoading(false);
         setShowTerminal(false);
         return;
@@ -132,12 +118,12 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
               setStreamLines((prev) => [
                 ...prev,
                 "",
-                "✅ Hội đồng AI đã đưa ra quyết định.",
+                "✅ AI Agent Team has reached a decision.",
               ]);
             } catch (parseErr) {
               setStreamLines((prev) => [
                 ...prev,
-                `⚠️ Lỗi parse kết quả: ${parseErr}`,
+                `⚠️ Failed to parse result: ${parseErr}`,
               ]);
             }
             continue;
@@ -181,7 +167,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
         disabled={loading || !hasPrediction}
         title={
           !hasPrediction
-            ? "Hãy chạy ML Prediction trước để cung cấp dữ liệu cho Hội đồng AI."
+            ? "Run ML Prediction first to provide data for the AI Agent Team."
             : undefined
         }
         className="mt-2 w-full rounded-xl border border-violet-300/60 bg-gradient-to-r from-violet-500/15 via-fuchsia-500/10 to-cyan-500/10 px-4 py-3 text-sm font-semibold text-violet-100 transition hover:from-violet-500/25 hover:via-fuchsia-500/20 hover:to-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
@@ -189,7 +175,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
         {loading ? (
           <span className="flex items-center justify-center gap-2">
             <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-violet-300 border-t-transparent" />
-            Agents đang họp chiến lược...
+            Agents are analyzing strategy...
           </span>
         ) : (
           <span className="flex items-center justify-center gap-3 w-full">
@@ -200,7 +186,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
       </button>
       {!hasPrediction && !loading && (
         <p className="mt-1.5 text-center text-[10px] text-violet-200/50">
-          Chạy ML Prediction trước để mở khóa tính năng này.
+          Run ML Prediction first to unlock this feature.
         </p>
       )}
 
@@ -289,7 +275,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
               onClick={() => setShowTerminal((prev) => !prev)}
               className="text-[10px] text-violet-200/50 hover:text-violet-200/80 transition"
             >
-              {showTerminal ? "▲ Ẩn nhật ký họp" : "▼ Xem nhật ký họp"}
+              {showTerminal ? "▲ Hide transcript" : "▼ View transcript"}
             </button>
           )}
 
