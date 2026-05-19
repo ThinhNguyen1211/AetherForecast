@@ -1,0 +1,4 @@
+  File "<string>", line 1
+    import os,sys,boto3; bucket=os.environ.get('DATA_BUCKET',''); prefix=os.environ.get('PARQUET_PREFIX','market/klines').strip('/'); region=os.environ.get('AWS_REGION','ap-southeast-1'); s3=boto3.client('s3',region_name=region); pag=s3.get_paginator('list_objects_v2'); syms=set();\n[syms.add(p['Prefix'].split('symbol=')[1].split('/')[0].upper()) for page in pag.paginate(Bucket=bucket,Prefix=prefix+'/',Delimiter='/') for p in page.get('CommonPrefixes',[]) if 'symbol=' in p.get('Prefix','')]; \nsys.exit(1) if not syms else sys.stdout.write('\n'.join(sorted(syms)))
+                                                                                                                                                                                                                                                                                           ^
+SyntaxError: unexpected character after line continuation character
