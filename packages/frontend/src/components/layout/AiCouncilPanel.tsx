@@ -223,7 +223,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
             <img
               src={logoEye}
               alt="Aether AI"
-              className="w-8 h-8 flex-shrink-0 object-contain opacity-90 drop-shadow-[0_0_6px_rgba(139,92,246,0.5)]"
+              className="w-10 h-10 flex-shrink-0 object-contain opacity-90 drop-shadow-[0_0_6px_rgba(139,92,246,0.5)]"
             />
             <span>Aether AI Agents: Analyze &amp; Generate Signals</span>
           </>
@@ -318,7 +318,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
                 1 :{" "}
                 {Math.abs(
                   (finalDecision.take_profit - finalDecision.entry) /
-                    (finalDecision.entry - finalDecision.stop_loss || 1)
+                  (finalDecision.entry - finalDecision.stop_loss || 1)
                 ).toFixed(2)}
               </p>
             </div>
