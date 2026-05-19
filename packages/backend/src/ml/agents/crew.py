@@ -297,7 +297,7 @@ def run_trading_crew_streaming(
                 agent_name = agent_name.role
             label = _AGENT_LABELS.get(str(agent_name), str(agent_name))
             raw = getattr(task_output, "raw", str(task_output))
-            event_queue.put(f"[{label}] hoàn thành phân tích:\n{raw}")
+            event_queue.put(f"[{label}] completed analysis:\n{raw}")
         except Exception as exc:
             logger.debug("task_callback error (non-fatal): %s", exc)
             event_queue.put("[Agent] completed a task step.")
@@ -330,8 +330,8 @@ def run_trading_crew_streaming(
                 step_callback=_step_callback,
             )
 
-            event_queue.put(f"🚀 Khởi động Hội đồng AI cho {market.symbol} @ {market.timeframe}...")
-            event_queue.put("📊 Quant Analyst đang phân tích dữ liệu thị trường...")
+            event_queue.put(f"🚀 Initializing AI Council for {market.symbol} @ {market.timeframe}...")
+            event_queue.put("📊 Quant Analyst is analyzing market data...")
 
             result = crew.kickoff()
             raw_output = str(result)
