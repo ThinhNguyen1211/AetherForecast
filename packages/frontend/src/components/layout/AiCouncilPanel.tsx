@@ -225,7 +225,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
               alt="Aether AI"
               className="w-10 h-10 flex-shrink-0 object-contain opacity-90 drop-shadow-[0_0_6px_rgba(139,92,246,0.5)]"
             />
-            <span>Aether AI Agents: Analyze &amp; Generate Signals</span>
+            <span>Analyze &amp; Generate Signals</span>
           </>
         )}
       </button>
