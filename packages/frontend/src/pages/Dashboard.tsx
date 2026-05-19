@@ -642,7 +642,6 @@ export default function Dashboard() {
       return;
     }
 
-    // Cancel any in-flight symbols request to prevent race condition.
     if (symbolsControllerRef.current) {
       symbolsControllerRef.current.abort();
     }
@@ -651,33 +650,46 @@ export default function Dashboard() {
 
     setLoadingSymbols(true);
     setErrorMessage("");
-    try {
-      const payload = await fetchSymbols();
 
-      // If this request was superseded by a newer one, discard the result.
-      if (controller.signal.aborted) {
-        return;
-      }
+    let attempt = 0;
+    const maxAttempts = 3;
 
-      const symbolList = payload.length > 0 ? payload : ["BTCUSDT", "ETHUSDT"];
-      setSymbols(symbolList);
-      if (!symbolList.includes(symbol)) {
-        setSymbol(symbolList[0]);
+    while (attempt < maxAttempts) {
+      try {
+        const payload = await fetchSymbols();
+
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        const symbolList = payload.length > 0 ? payload : ["BTCUSDT", "ETHUSDT"];
+        setSymbols(symbolList);
+        if (!symbolList.includes(symbol)) {
+          setSymbol(symbolList[0]);
+        }
+        break;
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        
+        attempt++;
+        if (attempt >= maxAttempts) {
+          setErrorMessage(
+            resolveApiErrorMessage(
+              error,
+              "Unable to load symbols. Check JWT token and backend availability.",
+            ),
+          );
+        } else {
+          const delay = 500 + Math.random() * 500;
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
       }
-    } catch (error) {
-      if (controller.signal.aborted) {
-        return;
-      }
-      setErrorMessage(
-        resolveApiErrorMessage(
-          error,
-          "Unable to load symbols. Check JWT token and backend availability.",
-        ),
-      );
-    } finally {
-      if (!controller.signal.aborted) {
-        setLoadingSymbols(false);
-      }
+    }
+    
+    if (!controller.signal.aborted) {
+      setLoadingSymbols(false);
     }
   }, [token, symbol, setLoadingSymbols, setErrorMessage, setSymbols, setSymbol]);
 
