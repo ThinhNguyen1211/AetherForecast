@@ -966,6 +966,40 @@ class ForecastInferenceService:
         if len(closes) < 20:
             raise ValueError("At least 20 candles are required for robust model inference")
 
+        # --- Pro-rata projection for unclosed last candle ---
+        # The last candle may be partially formed (low volume, narrow range).
+        # Scale its volume proportionally to avoid polluting Chronos-2 context.
+        _TIMEFRAME_SECONDS = {
+            "1m": 60, "5m": 300, "15m": 900, "1h": 3600,
+            "4h": 14400, "1d": 86400, "1w": 604800,
+        }
+        tf_seconds = _TIMEFRAME_SECONDS.get(request.timeframe, 3600)
+        last_candle = request.latest_candles[-1]
+        candle_open_time = last_candle.timestamp
+        now_utc = datetime.now(timezone.utc)
+        elapsed_seconds = max(1.0, (now_utc - candle_open_time).total_seconds())
+        elapsed_ratio = min(1.0, elapsed_seconds / tf_seconds)
+
+        if elapsed_ratio < 0.95 and elapsed_ratio > 0.05:
+            # Pro-rata scale volume of the last candle
+            adjusted_volume = last_candle.volume / elapsed_ratio
+            from src.ml.schemas import Candle as CandleSchema
+            adjusted_last = CandleSchema(
+                timestamp=last_candle.timestamp,
+                open=last_candle.open,
+                high=last_candle.high,
+                low=last_candle.low,
+                close=last_candle.close,
+                volume=round(adjusted_volume, 8),
+            )
+            request = request.model_copy(
+                update={"latest_candles": list(request.latest_candles[:-1]) + [adjusted_last]}
+            )
+            logger.info(
+                "Pro-rata adjusted last candle volume: %.2f -> %.2f (ratio=%.3f, tf=%s)",
+                last_candle.volume, adjusted_volume, elapsed_ratio, request.timeframe,
+            )
+
         last_price = closes[-1]
         horizon = int(request.horizon)
         num_samples = max(10, min(64, int(self.settings.inference_num_samples)))
@@ -1099,6 +1133,21 @@ class ForecastInferenceService:
 
         median_forecast = quantile_values[0.5]
         prediction_array = [round(float(value), 8) for value in median_forecast.tolist()]
+
+        # --- Anchor Point: ensure prediction starts from the actual last close ---
+        # This eliminates the "first candle nosedive" artifact caused by the
+        # model forecasting from a partially-formed candle's distorted state.
+        if len(prediction_array) > 0:
+            anchor_offset = last_price - prediction_array[0]
+            if abs(anchor_offset) > 1e-10:
+                prediction_array = [round(v + anchor_offset, 8) for v in prediction_array]
+                # Shift all quantile bands by the same offset for consistency
+                for q_key in list(quantile_values.keys()):
+                    quantile_values[q_key] = quantile_values[q_key] + anchor_offset
+                logger.info(
+                    "Anchor offset applied: %.8f (last_price=%.8f, raw_first=%.8f)",
+                    anchor_offset, last_price, prediction_array[0] - anchor_offset,
+                )
 
         lower_q = min(quantiles)
         upper_q = max(quantiles)

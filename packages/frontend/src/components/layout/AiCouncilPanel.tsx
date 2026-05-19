@@ -151,11 +151,12 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
           const message = lines.join("\n").trim();
           if (!message || message === "[KEEPALIVE]") continue;
 
-          // Final result
-          if (message.startsWith("[FINAL_RESULT]:")) {
-            const jsonStr = message.slice("[FINAL_RESULT]:".length);
+          // Final result — use regex to safely extract JSON from potentially dirty SSE
+          const finalMatch = message.match(/\[FINAL_RESULT\]:(.*)/s);
+          if (finalMatch && finalMatch[1]) {
+            const cleanJson = finalMatch[1].trim();
             try {
-              const parsed = JSON.parse(jsonStr) as AiCouncilDecision;
+              const parsed = JSON.parse(cleanJson) as AiCouncilDecision;
               setFinalDecision(parsed);
               setAiLogs((prev) => [
                 ...prev,
@@ -165,7 +166,8 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
                 `   Action: ${parsed.action} | Confidence: ${(parsed.confidence * 100).toFixed(0)}%`,
               ]);
             } catch (parseErr) {
-              setAiLogs((prev) => [...prev, `⚠️ Failed to parse result: ${parseErr}`]);
+              console.error("Failed to parse AI result JSON:", parseErr, cleanJson);
+              setAiLogs((prev) => [...prev, `⚠️ Failed to parse result — raw output saved to console.`]);
             }
             continue;
           }
