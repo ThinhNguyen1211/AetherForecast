@@ -315,11 +315,20 @@ def run_trading_crew_streaming(
     def _run_crew() -> None:
         """Background thread: runs the blocking CrewAI pipeline."""
         try:
+            # Send progress BEFORE heavy initialization so the client
+            # sees activity immediately while the LLM loads.
+            event_queue.put(f"🚀 Initializing AI Council for {market.symbol} @ {market.timeframe}...")
+            event_queue.put("⏳ Loading Gemini LLM and building agent team...")
+
             llm = _build_llm()
+            event_queue.put("📊 Quant Analyst is analyzing market data...")
+
             quant = _quant_analyst_agent(llm)
             risk = _risk_manager_agent(llm)
             judge = _execution_judge_agent(llm)
             tasks = _build_tasks(quant, risk, judge, market)
+
+            event_queue.put("🛡️ Risk Manager and ⚖️ Execution Judge standing by...")
 
             crew = Crew(
                 agents=[quant, risk, judge],
@@ -330,8 +339,7 @@ def run_trading_crew_streaming(
                 step_callback=_step_callback,
             )
 
-            event_queue.put(f"🚀 Initializing AI Council for {market.symbol} @ {market.timeframe}...")
-            event_queue.put("📊 Quant Analyst is analyzing market data...")
+            event_queue.put("▶️ Crew kickoff — agents are deliberating...")
 
             result = crew.kickoff()
             raw_output = str(result)
@@ -345,14 +353,22 @@ def run_trading_crew_streaming(
         finally:
             event_queue.put(_SENTINEL)
 
+    # --- CRITICAL: Yield an immediate handshake event BEFORE starting the
+    # background thread. This forces Starlette/FastAPI to flush the HTTP
+    # response headers (status 200, Content-Type: text/event-stream) to
+    # the browser, resolving the "Provisional headers are shown" hang. ---
+    yield "data: [CONNECTED]\n\n"
+
     # Start the blocking crew in a background thread
     thread = threading.Thread(target=_run_crew, daemon=True)
     thread.start()
 
-    # Yield SSE events as they arrive from the queue
+    # Yield SSE events as they arrive from the queue.
+    # Use a short timeout (15s) so keepalives are sent frequently
+    # to prevent Caddy/CloudFront/browser from timing out.
     while True:
         try:
-            item = event_queue.get(timeout=120)
+            item = event_queue.get(timeout=15)
         except Empty:
             # Keep-alive to prevent proxy/client timeout
             yield "data: [KEEPALIVE]\n\n"

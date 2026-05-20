@@ -10,5 +10,17 @@
   # Security is still enforced via FastAPI CORSMiddleware and Cognito JWTs.
 
   encode zstd gzip
-  reverse_proxy 127.0.0.1:{$PORT:8000}
+
+  # SSE streaming: disable response buffering for the AI analyze endpoint
+  # so that Server-Sent Events are flushed immediately to the client.
+  handle /api/ai/* {
+    reverse_proxy 127.0.0.1:{$PORT:8000} {
+      flush_interval -1
+    }
+  }
+
+  # All other routes: standard reverse proxy
+  handle {
+    reverse_proxy 127.0.0.1:{$PORT:8000}
+  }
 }

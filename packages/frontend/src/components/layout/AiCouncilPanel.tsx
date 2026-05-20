@@ -109,6 +109,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Accept: "text/event-stream",
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ symbol, timeframe }),
@@ -149,7 +150,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
             .map((l) => l.slice(6));
 
           const message = lines.join("\n").trim();
-          if (!message || message === "[KEEPALIVE]") continue;
+          if (!message || message === "[KEEPALIVE]" || message === "[CONNECTED]") continue;
 
           // Final result — use regex to safely extract JSON from potentially dirty SSE
           const finalMatch = message.match(/\[FINAL_RESULT\]:(.*)/s);
