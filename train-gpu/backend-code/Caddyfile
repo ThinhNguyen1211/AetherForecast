@@ -11,6 +11,10 @@
 
   encode zstd gzip
 
+  # Strip duplicate Server headers (uvicorn + Caddy) to prevent HTTP 400
+  # from strict security agents that reject malformed multi-value Server headers.
+  header -Server
+
   # SSE streaming: disable response buffering for the AI analyze endpoint
   # so that Server-Sent Events are flushed immediately to the client.
   handle /api/ai/* {
