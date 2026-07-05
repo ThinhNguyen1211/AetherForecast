@@ -3,7 +3,10 @@
 3 agents: Quant Analyst, Risk Manager, Execution Judge.
 Input: market JSON (price, forecast, volatility, sentiment).
 Output: TradeDecision Pydantic schema (LONG/SHORT/HOLD + entry/SL/TP/leverage/reasoning).
-LLM: Google Gemini via langchain-google-genai (configurable via GEMINI_API_KEY env).
+LLM: DeepSeek via langchain-openai (OpenAI-compatible). Hybrid routing:
+  - Quant Analyst & Risk Manager → deepseek-chat (speed/cost)
+  - Execution Judge → deepseek-reasoner (deep logic)
+Configurable via DEEPSEEK_API_KEY env.
 
 Supports streaming via `run_trading_crew_streaming()` which yields SSE events
 in real-time as each agent produces output.
@@ -20,7 +23,7 @@ from queue import Empty, Queue
 from typing import Any, Generator
 
 from crewai import Agent, Crew, Process, Task
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -73,28 +76,50 @@ class AiAnalyzeRequest(BaseModel):
 # Agent Definitions
 # ---------------------------------------------------------------------------
 
-def _build_llm() -> Any:
-    """Build Google Gemini LLM client from environment.
-
-    Requires GEMINI_API_KEY env var. Never logs the key.
-    """
-    api_key = os.environ.get("GEMINI_API_KEY", "")
+def _get_deepseek_api_key() -> str:
+    """Retrieve DEEPSEEK_API_KEY from environment. Never logs the key."""
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
     if not api_key:
         raise RuntimeError(
-            "GEMINI_API_KEY environment variable is not set. "
+            "DEEPSEEK_API_KEY environment variable is not set. "
             "Add it to GitHub Secrets and deploy via SSM."
         )
+    return api_key
 
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 
-    # Log model name only — NEVER log the API key.
-    logger.info("Initializing Gemini LLM: model=%s", model)
+def _build_chat_llm() -> Any:
+    """Build DeepSeek-Chat LLM (fast/cost-optimized).
 
-    return ChatGoogleGenerativeAI(
+    Used by Quant Analyst & Risk Manager.
+    """
+    api_key = _get_deepseek_api_key()
+    model = os.environ.get("DEEPSEEK_CHAT_MODEL", "deepseek-chat")
+    logger.info("Initializing DeepSeek Chat LLM: model=%s", model)
+
+    return ChatOpenAI(
         model=model,
-        google_api_key=api_key,
+        api_key=api_key,
+        base_url="https://api.deepseek.com/v1",
         temperature=0.2,
-        convert_system_message_to_human=True,
+        max_tokens=2048,
+    )
+
+
+def _build_reasoner_llm() -> Any:
+    """Build DeepSeek-Reasoner LLM (deep logic/reasoning).
+
+    Used by Execution Judge for final decision making.
+    """
+    api_key = _get_deepseek_api_key()
+    model = os.environ.get("DEEPSEEK_REASONER_MODEL", "deepseek-reasoner")
+    logger.info("Initializing DeepSeek Reasoner LLM: model=%s", model)
+
+    return ChatOpenAI(
+        model=model,
+        api_key=api_key,
+        base_url="https://api.deepseek.com/v1",
+        temperature=0.0,
+        max_tokens=4096,
     )
 
 
@@ -318,14 +343,15 @@ def run_trading_crew_streaming(
             # Send progress BEFORE heavy initialization so the client
             # sees activity immediately while the LLM loads.
             event_queue.put(f"🚀 Initializing AI Council for {market.symbol} @ {market.timeframe}...")
-            event_queue.put("⏳ Loading Gemini LLM and building agent team...")
+            event_queue.put("⏳ Loading DeepSeek LLMs (hybrid routing)...")
 
-            llm = _build_llm()
+            chat_llm = _build_chat_llm()
+            reasoner_llm = _build_reasoner_llm()
             event_queue.put("📊 Quant Analyst is analyzing market data...")
 
-            quant = _quant_analyst_agent(llm)
-            risk = _risk_manager_agent(llm)
-            judge = _execution_judge_agent(llm)
+            quant = _quant_analyst_agent(chat_llm)
+            risk = _risk_manager_agent(chat_llm)
+            judge = _execution_judge_agent(reasoner_llm)
             tasks = _build_tasks(quant, risk, judge, market)
 
             event_queue.put("🛡️ Risk Manager and ⚖️ Execution Judge standing by...")
@@ -391,13 +417,14 @@ def run_trading_crew_streaming(
 def run_trading_crew(market: MarketContext) -> TradeDecision:
     """Execute the 3-agent CrewAI pipeline and return a structured TradeDecision.
 
-    Raises RuntimeError if GEMINI_API_KEY is missing.
+    Raises RuntimeError if DEEPSEEK_API_KEY is missing.
     """
-    llm = _build_llm()
+    chat_llm = _build_chat_llm()
+    reasoner_llm = _build_reasoner_llm()
 
-    quant = _quant_analyst_agent(llm)
-    risk = _risk_manager_agent(llm)
-    judge = _execution_judge_agent(llm)
+    quant = _quant_analyst_agent(chat_llm)
+    risk = _risk_manager_agent(chat_llm)
+    judge = _execution_judge_agent(reasoner_llm)
 
     tasks = _build_tasks(quant, risk, judge, market)
 

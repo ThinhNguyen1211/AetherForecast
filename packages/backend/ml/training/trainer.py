@@ -189,13 +189,12 @@ def _load_base_model(
                 if tokenizer.pad_token is None and tokenizer.eos_token is not None:
                     tokenizer.pad_token = tokenizer.eos_token
 
-                seq2seq_error: Exception | None = None
                 try:
                     model = AutoModelForSeq2SeqLM.from_pretrained(candidate, **kwargs)
                     logger.info("Loaded seq2seq model for training from %s", candidate)
                     return model, tokenizer, True
                 except Exception as exc:
-                    seq2seq_error = exc
+                    _seq2seq_error = exc  # noqa: F841
                     logger.warning(
                         "Seq2seq load failed for %s on attempt %s: %s",
                         candidate,

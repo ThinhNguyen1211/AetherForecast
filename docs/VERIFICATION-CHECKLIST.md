@@ -9,7 +9,7 @@ Use this checklist after each major deploy or before handover acceptance.
 
 ## Chart & Realtime
 - [ ] Symbol list loads.
-- [ ] Historical chart candles load from backend parquet source.
+- [ ] Historical chart candles load from backend chart endpoint (Binance REST) and render.
 - [ ] WebSocket stream works at wss://<api-domain>/ws/BTCUSDT.
 - [ ] Realtime candle updates are rendered on chart.
 
@@ -20,7 +20,7 @@ Use this checklist after each major deploy or before handover acceptance.
 
 ## Data Cron + Parquet
 - [ ] Manual host cron trigger (`/usr/local/bin/aetherforecast-fetch-cron.sh`) runs successfully.
-- [ ] New parquet objects appear in symbol/year/month/day partitions.
+- [ ] New parquet objects appear in symbol/year/month partitions (day only if incremental fetcher is used).
 - [ ] Watermark files update in metadata prefix.
 - [ ] FetchErrors metric remains low/zero.
 

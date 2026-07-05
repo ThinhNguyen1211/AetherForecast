@@ -6,7 +6,7 @@ Fetches 100% real quantitative data (zero LLM dependency):
   - Macro: DXY (US Dollar Index), US 10Y Yield via yfinance
   - Feature Engineering: RSI, MACD, Bollinger Bands, ATR, % Change
 
-Writes enriched Parquet to S3 partitioned by symbol/year/month.
+Writes enriched Parquet to S3 partitioned by symbol/year/month/day.
 Designed to run every 15 minutes via cron on EC2.
 
 Usage:
@@ -307,7 +307,11 @@ def add_ta_features(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def write_to_s3(df: pd.DataFrame, symbol: str, bucket: str, prefix: str, region: str) -> None:
-    """Write enriched DataFrame to S3 as partitioned Parquet."""
+    """Write enriched DataFrame to S3 as day-partitioned Parquet.
+
+    Target path:
+        s3://<bucket>/<prefix>/symbol=<SYM>/year=YYYY/month=MM/day=DD/
+    """
     try:
         import awswrangler as wr
     except ImportError:
@@ -319,6 +323,7 @@ def write_to_s3(df: pd.DataFrame, symbol: str, bucket: str, prefix: str, region:
         return
 
     import boto3
+    from botocore.exceptions import ClientError
 
     session = boto3.Session(region_name=region)
 
@@ -326,6 +331,7 @@ def write_to_s3(df: pd.DataFrame, symbol: str, bucket: str, prefix: str, region:
     df_out["symbol"] = symbol
     df_out["year"] = df_out["timestamp"].dt.year.astype(str)
     df_out["month"] = df_out["timestamp"].dt.month.astype(str).str.zfill(2)
+    df_out["day"] = df_out["timestamp"].dt.day.astype(str).str.zfill(2)
 
     s3_path = f"s3://{bucket}/{prefix.strip('/')}/symbol={symbol}/"
 
@@ -335,12 +341,25 @@ def write_to_s3(df: pd.DataFrame, symbol: str, bucket: str, prefix: str, region:
             path=s3_path,
             dataset=True,
             mode="overwrite_partitions",
-            partition_cols=["year", "month"],
+            partition_cols=["year", "month", "day"],
             boto3_session=session,
         )
-        logger.info("Wrote %d rows for %s to %s", len(df_out), symbol, s3_path)
+        logger.info(
+            "✅ Wrote %d rows for %s → %s (partitions: year/month/day)",
+            len(df_out), symbol, s3_path,
+        )
+    except ClientError as exc:
+        error_code = exc.response["Error"]["Code"]
+        error_msg = exc.response["Error"]["Message"]
+        http_status = exc.response["ResponseMetadata"]["HTTPStatusCode"]
+        logger.error(
+            "❌ S3 ClientError writing %s: [%s] %s (HTTP %d). "
+            "Check IAM role has s3:PutObject on arn:aws:s3:::%s/%s/*",
+            symbol, error_code, error_msg, http_status,
+            bucket, prefix.strip('/'),
+        )
     except Exception as exc:
-        logger.error("Failed to write %s to S3: %s", symbol, exc)
+        logger.error("❌ Unexpected error writing %s to S3: %s", symbol, exc, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -426,11 +445,20 @@ def main() -> None:
     prefix = os.getenv("PARQUET_PREFIX", "market/klines")
     region = os.getenv("AWS_REGION", "ap-southeast-1")
 
+    if not bucket and not args.dry_run:
+        logger.error(
+            "❌ DATA_BUCKET env var is not set! Cannot write to S3. "
+            "Set DATA_BUCKET or DATA_S3_BUCKET, or use --dry-run."
+        )
+        sys.exit(1)
+
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()] if args.symbols else DEFAULT_SYMBOLS
 
     logger.info("=" * 60)
     logger.info("AetherForecast Data Ingestion Pipeline")
-    logger.info("Symbols: %d | Bucket: %s | Dry-run: %s", len(symbols), bucket or "(none)", args.dry_run)
+    logger.info("Bucket:   s3://%s/%s/", bucket, prefix)
+    logger.info("Symbols:  %d | Region: %s | Dry-run: %s", len(symbols), region, args.dry_run)
+    logger.info("Partition: symbol/year/month/day")
     logger.info("=" * 60)
 
     # Pre-fetch macro data (shared across all symbols)
@@ -456,8 +484,6 @@ def main() -> None:
 
                 if args.dry_run:
                     logger.info("[DRY-RUN] %s: %d rows, cols=%s", symbol, len(df), list(df.columns))
-                elif not bucket:
-                    logger.warning("DATA_BUCKET not set — cannot write to S3")
                 else:
                     write_to_s3(df, symbol, bucket, prefix, region)
 

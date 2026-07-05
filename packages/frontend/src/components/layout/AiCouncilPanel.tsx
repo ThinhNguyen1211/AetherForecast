@@ -152,13 +152,15 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
           const message = lines.join("\n").trim();
           if (!message || message === "[KEEPALIVE]" || message === "[CONNECTED]") continue;
 
-          // Final result — use regex to safely extract JSON from potentially dirty SSE
-          const finalMatch = message.match(/\[FINAL_RESULT\]:(.*)/s);
+          // Final result — extract strictly the JSON object after [FINAL_RESULT],
+          // immune to trailing newlines, whitespace, or SSE fragment leftovers.
+          const finalMatch = message.match(/\[FINAL_RESULT\]:?\s*(\{.*\})/s);
           if (finalMatch && finalMatch[1]) {
-            const cleanJson = finalMatch[1].trim();
             try {
+              const cleanJson = finalMatch[1].trim();
               const parsed = JSON.parse(cleanJson) as AiCouncilDecision;
               setFinalDecision(parsed);
+              setIsAnalyzing(false);
               setAiLogs((prev) => [
                 ...prev,
                 "",
@@ -167,7 +169,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
                 `   Action: ${parsed.action} | Confidence: ${(parsed.confidence * 100).toFixed(0)}%`,
               ]);
             } catch (parseErr) {
-              console.error("Failed to parse AI result JSON:", parseErr, cleanJson);
+              console.error("Parse Error Final JSON:", parseErr, message);
               setAiLogs((prev) => [...prev, `⚠️ Failed to parse result — raw output saved to console.`]);
             }
             continue;
@@ -191,7 +193,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
       const message =
         err instanceof Error
           ? err.message
-          : "AI Agent Team is unavailable. Check GEMINI_API_KEY configuration.";
+          : "AI Agent Team is unavailable. Check DEEPSEEK_API_KEY configuration.";
       setError(message);
     } finally {
       setIsAnalyzing(false);

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from functools import lru_cache
 import io
 import json
@@ -839,8 +838,7 @@ def _load_with_awswrangler(config: TrainingDatasetConfig) -> pd.DataFrame:
     if wr is None:
         raise RuntimeError("awswrangler is not available")
 
-    # Use a larger connection pool to avoid "Connection pool is full" warnings during multi-threaded S3 reads
-    boto_config = Config(max_pool_connections=50)
+    # awswrangler uses the session's internal connection pool
     session = boto3.Session(region_name=config.aws_region)
     dataframes: list[pd.DataFrame] = []
 

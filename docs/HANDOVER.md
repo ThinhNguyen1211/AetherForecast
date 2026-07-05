@@ -7,7 +7,8 @@ AetherForecast is a full-stack production-ready forecasting platform for crypto 
 - Realtime WebSocket market updates
 - Partitioned S3 parquet data lake ingestion
 - Hugging Face-based forecasting inference
-- AWS Batch Spot GPU LoRA training and S3 manifest-based promotion
+- AWS Batch GPU LoRA training (on-demand default; spot optional) and S3 manifest-based promotion
+- Optional dedicated EC2 GPU training host
 - React + Vite trading dashboard UI
 - GitHub Actions CI/CD for backend, frontend, and infrastructure
 
@@ -19,18 +20,19 @@ AetherForecast is a full-stack production-ready forecasting platform for crypto 
 [CloudFront] --> [S3 Frontend Bucket]
    |
    v
-[EC2 t3.micro + Docker]
+[EC2 t4g.small (Arm64) + Docker]
    |
    v
 [Caddy -> FastAPI Service] <--> [Cognito JWT Validation]
    |           |\
+   |           | \--> [/chart -> Binance REST]
    |           | \--> [WebSocket Binance Stream]
-   |           \----> [S3 Model Manifest + Artifacts]
+   |           \----> [/predict -> S3 parquet + model]
    |
-   \----> [/predict inference]
+   \----> [S3 Model Manifest + Artifacts]
 
 [EC2 Host Cron (*/30min)]
-   -> [Container cronjob.sh: data fetch]
+   -> [Container cronjob.sh (15m loop): data fetch]
    -> [S3 Parquet partitioned lake]
 
 [AWS Batch Spot GPU]
@@ -43,7 +45,7 @@ AetherForecast is a full-stack production-ready forecasting platform for crypto 
 
 ## 3. Cost Estimate (Low Traffic, Approx)
 Estimated monthly range in ap-southeast-1 with low traffic and periodic training:
-- EC2 backend (t3.micro + EBS + transfer): $12-$35
+- EC2 backend (t4g.small + EBS + transfer): $12-$35
 - S3 (frontend + parquet + models): $10-$40
 - CloudFront: $5-$20
 - CloudWatch logs/metrics/alarms: $10-$30
