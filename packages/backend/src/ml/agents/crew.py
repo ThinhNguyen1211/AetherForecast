@@ -370,9 +370,18 @@ def run_trading_crew_streaming(
             result = crew.kickoff()
             raw_output = str(result)
             decision = _parse_trade_decision(raw_output)
-            decision_json = decision.model_dump_json()
 
-            event_queue.put(f"[FINAL_RESULT]:{decision_json}")
+            # CRITICAL: Compact the JSON to a single line with no whitespace.
+            # Pydantic's model_dump_json() is usually compact, but the
+            # "reasoning" field can contain LLM-generated newlines. We
+            # parse and re-dump to guarantee zero newlines in the output,
+            # which prevents the SSE line-splitter from fragmenting the
+            # JSON across multiple "data:" lines.
+            compact_json = json.dumps(
+                decision.model_dump(), separators=(",", ":")
+            )
+
+            event_queue.put(f"[FINAL_RESULT]:{compact_json}")
         except Exception as exc:
             logger.exception("CrewAI streaming pipeline error")
             event_queue.put(f"[ERROR]:{exc}")
@@ -404,7 +413,16 @@ def run_trading_crew_streaming(
             break
 
         message = str(item)
-        # SSE format: each line prefixed with "data: ", double newline to end event
+
+        # [FINAL_RESULT] and [ERROR] are protocol messages that MUST be
+        # yielded as a single "data:" line.  The JSON is already compacted
+        # to a single line (no \n), so we bypass the line-splitter.
+        if message.startswith("[FINAL_RESULT]:") or message.startswith("[ERROR]:"):
+            yield f"data: {message}\n\n"
+            continue
+
+        # Regular messages (agent thoughts, progress) — split by newline
+        # per SSE spec so multi-line text renders correctly in the terminal.
         for line in message.split("\n"):
             yield f"data: {line}\n"
         yield "\n"
