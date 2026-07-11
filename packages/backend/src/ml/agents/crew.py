@@ -97,9 +97,9 @@ def _build_chat_llm() -> Any:
     logger.info("Initializing DeepSeek Chat LLM: model=%s", model)
 
     return ChatOpenAI(
-        model=model,
-        api_key=api_key,
-        base_url="https://api.deepseek.com/v1",
+        model_name=model,
+        openai_api_key=api_key,
+        openai_api_base="https://api.deepseek.com/v1",
         temperature=0.2,
         max_tokens=2048,
     )
@@ -115,9 +115,9 @@ def _build_reasoner_llm() -> Any:
     logger.info("Initializing DeepSeek Reasoner LLM: model=%s", model)
 
     return ChatOpenAI(
-        model=model,
-        api_key=api_key,
-        base_url="https://api.deepseek.com/v1",
+        model_name=model,
+        openai_api_key=api_key,
+        openai_api_base="https://api.deepseek.com/v1",
         temperature=0.0,
         max_tokens=4096,
     )
@@ -338,22 +338,36 @@ def run_trading_crew_streaming(
             pass
 
     def _run_crew() -> None:
-        """Background thread: runs the blocking CrewAI pipeline."""
+        """Background thread: runs the blocking CrewAI pipeline.
+
+        Every possible failure point is wrapped so that the error is
+        always surfaced to the frontend via the event queue — never
+        swallowed silently.
+        """
         try:
-            # Send progress BEFORE heavy initialization so the client
-            # sees activity immediately while the LLM loads.
+            # --- Phase 1: LLM Initialization ---
             event_queue.put(f"🚀 Initializing AI Council for {market.symbol} @ {market.timeframe}...")
             event_queue.put("⏳ Loading DeepSeek LLMs (hybrid routing)...")
 
-            chat_llm = _build_chat_llm()
-            reasoner_llm = _build_reasoner_llm()
-            event_queue.put("📊 Quant Analyst is analyzing market data...")
+            try:
+                chat_llm = _build_chat_llm()
+                reasoner_llm = _build_reasoner_llm()
+            except Exception as llm_exc:
+                logger.exception("DeepSeek LLM initialization failed")
+                event_queue.put(
+                    f"[ERROR]:DeepSeek LLM Init Failed - {type(llm_exc).__name__}: {llm_exc}"
+                )
+                return
 
+            event_queue.put("✅ LLMs loaded. Building agent team...")
+
+            # --- Phase 2: Agent & Task Construction ---
             quant = _quant_analyst_agent(chat_llm)
             risk = _risk_manager_agent(chat_llm)
             judge = _execution_judge_agent(reasoner_llm)
             tasks = _build_tasks(quant, risk, judge, market)
 
+            event_queue.put("📊 Quant Analyst is analyzing market data...")
             event_queue.put("🛡️ Risk Manager and ⚖️ Execution Judge standing by...")
 
             crew = Crew(
@@ -365,26 +379,35 @@ def run_trading_crew_streaming(
                 step_callback=_step_callback,
             )
 
+            # --- Phase 3: Crew Execution ---
             event_queue.put("▶️ Crew kickoff — agents are deliberating...")
 
-            result = crew.kickoff()
+            try:
+                result = crew.kickoff()
+            except Exception as crew_exc:
+                logger.exception("CrewAI kickoff crashed")
+                event_queue.put(
+                    f"[ERROR]:CrewAI Crash - {type(crew_exc).__name__}: {crew_exc}"
+                )
+                return
+
+            # --- Phase 4: Parse & Yield Result ---
             raw_output = str(result)
             decision = _parse_trade_decision(raw_output)
 
-            # CRITICAL: Compact the JSON to a single line with no whitespace.
-            # Pydantic's model_dump_json() is usually compact, but the
-            # "reasoning" field can contain LLM-generated newlines. We
-            # parse and re-dump to guarantee zero newlines in the output,
-            # which prevents the SSE line-splitter from fragmenting the
-            # JSON across multiple "data:" lines.
+            # Compact the JSON to a single line — no newlines allowed.
             compact_json = json.dumps(
                 decision.model_dump(), separators=(",", ":")
             )
 
             event_queue.put(f"[FINAL_RESULT]:{compact_json}")
+
         except Exception as exc:
-            logger.exception("CrewAI streaming pipeline error")
-            event_queue.put(f"[ERROR]:{exc}")
+            # Catch-all for anything we didn't anticipate above.
+            logger.exception("CrewAI streaming pipeline error (unexpected)")
+            event_queue.put(
+                f"[ERROR]:CrewAI Unexpected Error - {type(exc).__name__}: {exc}"
+            )
         finally:
             event_queue.put(_SENTINEL)
 
@@ -399,33 +422,40 @@ def run_trading_crew_streaming(
     thread.start()
 
     # Yield SSE events as they arrive from the queue.
-    # Use a short timeout (15s) so keepalives are sent frequently
-    # to prevent Caddy/CloudFront/browser from timing out.
-    while True:
-        try:
-            item = event_queue.get(timeout=15)
-        except Empty:
-            # Keep-alive to prevent proxy/client timeout
-            yield "data: [KEEPALIVE]\n\n"
-            continue
+    # The entire yield loop is wrapped in try/except so that any crash
+    # in the generator itself (queue errors, serialization bugs) is
+    # surfaced to the client instead of silently dropping the stream.
+    try:
+        while True:
+            try:
+                item = event_queue.get(timeout=15)
+            except Empty:
+                # Keep-alive to prevent proxy/client timeout
+                yield "data: [KEEPALIVE]\n\n"
+                continue
 
-        if item is _SENTINEL:
-            break
+            if item is _SENTINEL:
+                break
 
-        message = str(item)
+            message = str(item)
 
-        # [FINAL_RESULT] and [ERROR] are protocol messages that MUST be
-        # yielded as a single "data:" line.  The JSON is already compacted
-        # to a single line (no \n), so we bypass the line-splitter.
-        if message.startswith("[FINAL_RESULT]:") or message.startswith("[ERROR]:"):
-            yield f"data: {message}\n\n"
-            continue
+            # [FINAL_RESULT] and [ERROR] are protocol messages that MUST be
+            # yielded as a single "data:" line.  The JSON is already compacted
+            # to a single line (no \n), so we bypass the line-splitter.
+            if message.startswith("[FINAL_RESULT]:") or message.startswith("[ERROR]:"):
+                yield f"data: {message}\n\n"
+                continue
 
-        # Regular messages (agent thoughts, progress) — split by newline
-        # per SSE spec so multi-line text renders correctly in the terminal.
-        for line in message.split("\n"):
-            yield f"data: {line}\n"
-        yield "\n"
+            # Regular messages (agent thoughts, progress) — split by newline
+            # per SSE spec so multi-line text renders correctly in the terminal.
+            for line in message.split("\n"):
+                yield f"data: {line}\n"
+            yield "\n"
+
+    except Exception as gen_exc:
+        # If the generator itself crashes, surface it to the client.
+        logger.exception("SSE generator crash")
+        yield f"data: [ERROR]:SSE Stream Error - {type(gen_exc).__name__}: {gen_exc}\n\n"
 
 
 # ---------------------------------------------------------------------------

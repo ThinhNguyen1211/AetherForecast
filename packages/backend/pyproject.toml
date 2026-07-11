@@ -8,6 +8,13 @@ requires-python = ">=3.11"
 testpaths = ["tests"]
 pythonpath = ["."]
 
+[tool.pyright]
+# The project has two import roots:
+#   - "src/" for the FastAPI app (src.main, src.ml.agents, etc.)
+#   - "."  for the ML training package (ml.training.train, ml.training.dataset, etc.)
+extraPaths = [".", "src"]
+pythonVersion = "3.11"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

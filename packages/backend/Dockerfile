@@ -72,6 +72,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000 \
     TRAIN_MODE=false \
     CRON_MODE=false \
+    INGESTION_ENABLED=true \
+    INGESTION_INTERVAL_SECONDS=900 \
     UVICORN_WORKERS=1
 
 WORKDIR /app
@@ -87,7 +89,10 @@ COPY Caddyfile /etc/caddy/Caddyfile
 COPY entrypoint.sh ./entrypoint.sh
 COPY cronjob.sh ./cronjob.sh
 
+# Create log directory writable by the non-root app user
 RUN chmod +x ./entrypoint.sh ./cronjob.sh \
+    && mkdir -p /var/log \
+    && chown app:app /var/log \
     && find /app -type d -name "__pycache__" -prune -exec rm -rf {} +
 
 EXPOSE 80 443
@@ -98,3 +103,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 USER app
 
 CMD ["/app/entrypoint.sh"]
+
