@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import threading
+import traceback
 from enum import Enum
 from queue import Empty, Queue
 from typing import Any, Generator
@@ -354,9 +355,11 @@ def run_trading_crew_streaming(
                 reasoner_llm = _build_reasoner_llm()
             except Exception as llm_exc:
                 logger.exception("DeepSeek LLM initialization failed")
+                error_tb = traceback.format_exc().replace("\n", " | ")
                 event_queue.put(
                     f"[ERROR]:DeepSeek LLM Init Failed - {type(llm_exc).__name__}: {llm_exc}"
                 )
+                event_queue.put(f"[TRACE]:{error_tb}")
                 return
 
             event_queue.put("✅ LLMs loaded. Building agent team...")
@@ -386,9 +389,11 @@ def run_trading_crew_streaming(
                 result = crew.kickoff()
             except Exception as crew_exc:
                 logger.exception("CrewAI kickoff crashed")
+                error_tb = traceback.format_exc().replace("\n", " | ")
                 event_queue.put(
                     f"[ERROR]:CrewAI Crash - {type(crew_exc).__name__}: {crew_exc}"
                 )
+                event_queue.put(f"[TRACE]:{error_tb}")
                 return
 
             # --- Phase 4: Parse & Yield Result ---
@@ -405,9 +410,11 @@ def run_trading_crew_streaming(
         except Exception as exc:
             # Catch-all for anything we didn't anticipate above.
             logger.exception("CrewAI streaming pipeline error (unexpected)")
+            error_tb = traceback.format_exc().replace("\n", " | ")
             event_queue.put(
                 f"[ERROR]:CrewAI Unexpected Error - {type(exc).__name__}: {exc}"
             )
+            event_queue.put(f"[TRACE]:{error_tb}")
         finally:
             event_queue.put(_SENTINEL)
 
@@ -442,7 +449,7 @@ def run_trading_crew_streaming(
             # [FINAL_RESULT] and [ERROR] are protocol messages that MUST be
             # yielded as a single "data:" line.  The JSON is already compacted
             # to a single line (no \n), so we bypass the line-splitter.
-            if message.startswith("[FINAL_RESULT]:") or message.startswith("[ERROR]:"):
+            if message.startswith("[FINAL_RESULT]:") or message.startswith("[ERROR]:") or message.startswith("[TRACE]:"):
                 yield f"data: {message}\n\n"
                 continue
 
@@ -455,7 +462,9 @@ def run_trading_crew_streaming(
     except Exception as gen_exc:
         # If the generator itself crashes, surface it to the client.
         logger.exception("SSE generator crash")
+        error_tb = traceback.format_exc().replace("\n", " | ")
         yield f"data: [ERROR]:SSE Stream Error - {type(gen_exc).__name__}: {gen_exc}\n\n"
+        yield f"data: [TRACE]:{error_tb}\n\n"
 
 
 # ---------------------------------------------------------------------------

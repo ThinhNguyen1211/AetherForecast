@@ -189,7 +189,7 @@ jobs:
       ec2-instance-id: ${{ needs.resolve-backend-instance.outputs.ec2_instance_id }}
       image-uri: ${{ needs.backend-build-push-ecr.outputs.image_uri }}
     secrets:
-      gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+      deepseek-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
 
   backend-summary:
     name: Backend CI Summary

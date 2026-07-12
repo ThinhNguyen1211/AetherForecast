@@ -179,6 +179,14 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
           if (message.startsWith("[ERROR]:")) {
             const errMsg = message.slice("[ERROR]:".length);
             setError(errMsg);
+            setAiLogs((prev) => [...prev, `❌ ${errMsg}`]);
+            continue;
+          }
+
+          // Traceback event — display full stack trace in the terminal
+          if (message.startsWith("[TRACE]:")) {
+            const trace = message.slice("[TRACE]:".length);
+            setAiLogs((prev) => [...prev, `🔍 Traceback: ${trace}`]);
             continue;
           }
 
