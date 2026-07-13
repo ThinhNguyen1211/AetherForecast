@@ -226,16 +226,15 @@ jobs:
           ROLL_SCRIPT
 
           # Build SSM parameters file. AWS-RunShellScript expects runCommand
-          # as a StringList and timeoutSeconds as a String. By passing the
-          # entire rollout as one element of runCommand, it executes in a
-          # single shell where set -euo pipefail is active throughout.
+          # as a StringList. The command timeout is already passed directly to
+          # the aws ssm send-command CLI via --timeout-seconds, so we do not
+          # duplicate it here (AWS Parameters values must be lists of strings).
           python3 - <<'PY' > rollout-commands.json
-          import json, os
+          import json
           with open("/tmp/rollout.sh", "r", encoding="utf-8") as f:
               script = f.read()
           payload = {
-              "commands": [script],
-              "timeoutSeconds": os.environ["TIMEOUT_SECONDS"],
+              "commands": [script]
           }
           print(json.dumps(payload))
           PY
