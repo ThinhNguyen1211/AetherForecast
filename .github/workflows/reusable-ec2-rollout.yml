@@ -27,7 +27,7 @@ on:
     secrets:
       deepseek-api-key:
         description: DeepSeek API key to inject into EC2 .env
-        required: false
+        required: true
 
 permissions:
   id-token: write
@@ -62,34 +62,183 @@ jobs:
         run: |
           ECR_REGISTRY=$(echo "$IMAGE_URI" | cut -d/ -f1)
 
-          cat > rollout-commands.json <<EOF
-          {
-            "commands": [
-              "set -euo pipefail",
-              "echo [rollout] region=${AWS_REGION} ecr=${ECR_REGISTRY}",
-              "echo [rollout] image=${IMAGE_URI}",
-              "aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}",
-              "docker pull ${IMAGE_URI}",
-              "if [ -n '${DEEPSEEK_API_KEY}' ]; then grep -q '^DEEPSEEK_API_KEY=' /opt/aetherforecast/.env 2>/dev/null && sed -i 's|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}|' /opt/aetherforecast/.env || echo 'DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}' >> /opt/aetherforecast/.env; fi",
-              "docker stop aetherforecast-backend-canary || true",
-              "docker rm -f aetherforecast-backend-canary || true",
-              "docker run -d --name aetherforecast-backend-canary --restart unless-stopped -p 8080:80 --env-file /opt/aetherforecast/.env -v /opt/aetherforecast/caddy_data:/data -v /opt/aetherforecast/caddy_config:/config ${IMAGE_URI}",
-              "sleep 8",
-              "curl -fsS --max-time 10 http://127.0.0.1:8080/health || { docker logs aetherforecast-backend-canary --tail 50; exit 1; }",
-              "docker rm -f aetherforecast-backend-old || true",
-              "docker stop aetherforecast-backend || true",
-              "docker rename aetherforecast-backend aetherforecast-backend-old || true",
-              "docker stop aetherforecast-backend-canary || true",
-              "docker rm -f aetherforecast-backend-canary || true",
-              "docker create --name aetherforecast-backend --restart unless-stopped -p 80:80 -p 443:443 --env-file /opt/aetherforecast/.env -v /opt/aetherforecast/caddy_data:/data -v /opt/aetherforecast/caddy_config:/config ${IMAGE_URI}",
-              "docker start aetherforecast-backend",
-              "sleep 5",
-              "curl -fsS --max-time 10 http://127.0.0.1/health || { docker logs aetherforecast-backend --tail 50; exit 1; }",
-              "echo ${IMAGE_URI} > /opt/aetherforecast/backend-image-uri.txt",
-              "docker rm -f aetherforecast-backend-old || true"
-            ]
-          }
+          # -----------------------------------------------------------------
+          # Single, atomic shell script. AWS-RunShellScript runs each entry
+          # of the "commands" JSON array in a SEPARATE shell, so the previous
+          # "set -euo pipefail" only applied to the first, empty shell and
+          # did not protect the rest of the rollout. Writing the script to a
+          # file and executing it as one command fixes that silent-failure
+          # mode and lets us implement rollback/verification.
+          # -----------------------------------------------------------------
+          cat > /tmp/rollout.sh <<'ROLL_SCRIPT'
+          set -euo pipefail
+          ROLL_SCRIPT
+
+          # Inject runtime values expanded on the GitHub runner. These are
+          # the only variables that must come from the workflow environment;
+          # everything else is literal shell syntax that runs on the EC2 host.
+          cat >> /tmp/rollout.sh <<EOF
+          export AWS_REGION="$AWS_REGION"
+          export IMAGE_URI="$IMAGE_URI"
+          export ECR_REGISTRY="$ECR_REGISTRY"
+          export DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY"
           EOF
+
+          cat >> /tmp/rollout.sh <<'ROLL_SCRIPT'
+          ENV_FILE="/opt/aetherforecast/.env"
+          CANARY="aetherforecast-backend-canary"
+          ACTIVE="aetherforecast-backend"
+          BACKUP="aetherforecast-backend-old"
+          HEALTH_CANARY="http://127.0.0.1:8080/health"
+          HEALTH_ACTIVE="http://127.0.0.1/health"
+
+          # Set to 1 after the old active container has been renamed to BACKUP.
+          # Rollback must NOT delete the original active container before that point.
+          RENAMED_OLD=0
+
+          log() { echo "[rollout $(date -u +%H:%M:%SZ)] $*"; }
+
+          rollback() {
+            set +e
+            log "ROLLBACK triggered. Restoring previous container if present."
+            if [ "$RENAMED_OLD" = "1" ] && docker inspect "$BACKUP" >/dev/null 2>&1; then
+              docker rm -f "$ACTIVE" >/dev/null 2>&1 || true
+              docker rename "$BACKUP" "$ACTIVE" >/dev/null 2>&1 || true
+              docker start "$ACTIVE" >/dev/null 2>&1 || true
+              log "Restored $ACTIVE from $BACKUP."
+            fi
+            docker rm -f "$CANARY" >/dev/null 2>&1 || true
+            set -e
+          }
+          trap rollback EXIT
+
+          log "region=$AWS_REGION ecr=$ECR_REGISTRY"
+          log "image=$IMAGE_URI"
+
+          # --- 1. ECR auth & image pull ------------------------------------
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+          docker pull "$IMAGE_URI"
+
+          # --- 2. Wire DEEPSEEK_API_KEY into EC2 .env -----------------------
+          mkdir -p "$(dirname "$ENV_FILE")"
+          touch "$ENV_FILE"
+          chmod 600 "$ENV_FILE"
+
+          if [ -z "$DEEPSEEK_API_KEY" ]; then
+            log "ERROR: DEEPSEEK_API_KEY is required but was not provided"
+            exit 1
+          fi
+
+          if grep -q '^DEEPSEEK_API_KEY=' "$ENV_FILE" 2>/dev/null; then
+            sed -i "s|^DEEPSEEK_API_KEY=.*|DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY|" "$ENV_FILE"
+          else
+            echo "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY" >> "$ENV_FILE"
+          fi
+          log "DEEPSEEK_API_KEY refreshed in $ENV_FILE"
+
+          # Stamp the deployed image URI so ingestion logs can prove which code
+          # is actually writing to S3 (critical for Phantom Production debugging).
+          if grep -q '^BACKEND_IMAGE_URI=' "$ENV_FILE" 2>/dev/null; then
+            sed -i "s|^BACKEND_IMAGE_URI=.*|BACKEND_IMAGE_URI=$IMAGE_URI|" "$ENV_FILE"
+          else
+            echo "BACKEND_IMAGE_URI=$IMAGE_URI" >> "$ENV_FILE"
+          fi
+
+          # --- 3. Inspect currently-running image for audit trail ----------
+          OLD_IMAGE="none"
+          if docker inspect --format='{{.Config.Image}}' "$ACTIVE" >/dev/null 2>&1; then
+            OLD_IMAGE=$(docker inspect --format='{{.Config.Image}}' "$ACTIVE")
+          fi
+          log "currently-running image: $OLD_IMAGE"
+
+          # --- 4. Start canary on host port 8080 ---------------------------
+          docker rm -f "$CANARY" >/dev/null 2>&1 || true
+          docker run -d --name "$CANARY" --restart unless-stopped \
+            -p 8080:80 \
+            --env-file "$ENV_FILE" \
+            -v /opt/aetherforecast/caddy_data:/data \
+            -v /opt/aetherforecast/caddy_config:/config \
+            "$IMAGE_URI"
+
+          log "canary started; waiting for /health ..."
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 5 "$HEALTH_CANARY" >/dev/null 2>&1; then
+              log "canary health check passed"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              log "ERROR: canary health check failed after 30 attempts"
+              docker logs "$CANARY" --tail 80 || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+          # --- 5. Replace active container ---------------------------------
+          docker rm -f "$BACKUP" >/dev/null 2>&1 || true
+          docker stop "$ACTIVE" >/dev/null 2>&1 || true
+          docker rename "$ACTIVE" "$BACKUP" >/dev/null 2>&1 || true
+          RENAMED_OLD=1
+
+          docker stop "$CANARY" >/dev/null 2>&1 || true
+          docker rm -f "$CANARY" >/dev/null 2>&1 || true
+
+          docker create --name "$ACTIVE" --restart unless-stopped \
+            -p 80:80 -p 443:443 \
+            --env-file "$ENV_FILE" \
+            -v /opt/aetherforecast/caddy_data:/data \
+            -v /opt/aetherforecast/caddy_config:/config \
+            "$IMAGE_URI"
+          docker start "$ACTIVE"
+
+          # --- 6. Verify active container health ----------------------------
+          log "active container started; waiting for /health ..."
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 5 "$HEALTH_ACTIVE" >/dev/null 2>&1; then
+              log "active health check passed"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              log "ERROR: active health check failed after 30 attempts"
+              docker logs "$ACTIVE" --tail 80 || true
+              exit 1
+            fi
+            sleep 2
+          done
+
+          # --- 7. Verify the running container is actually the new image ---
+          RUNNING_IMAGE=$(docker inspect --format='{{.Config.Image}}' "$ACTIVE")
+          if [ "$RUNNING_IMAGE" != "$IMAGE_URI" ]; then
+            log "ERROR: running image ($RUNNING_IMAGE) does not match requested image ($IMAGE_URI)"
+            exit 1
+          fi
+          log "verified active container image: $RUNNING_IMAGE"
+
+          echo "$IMAGE_URI" > /opt/aetherforecast/backend-image-uri.txt
+
+          # --- 8. Cleanup old container only after success -----------------
+          docker rm -f "$BACKUP" >/dev/null 2>&1 || true
+          log "rollout complete"
+
+          # Disable rollback trap now that we have succeeded
+          trap - EXIT
+          ROLL_SCRIPT
+
+          # Build SSM parameters file. AWS-RunShellScript expects runCommand
+          # as a StringList and timeoutSeconds as a String. By passing the
+          # entire rollout as one element of runCommand, it executes in a
+          # single shell where set -euo pipefail is active throughout.
+          python3 - <<'PY' > rollout-commands.json
+          import json, os
+          with open("/tmp/rollout.sh", "r", encoding="utf-8") as f:
+              script = f.read()
+          payload = {
+              "commands": [script],
+              "timeoutSeconds": os.environ["TIMEOUT_SECONDS"],
+          }
+          print(json.dumps(payload))
+          PY
 
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
@@ -119,7 +268,13 @@ jobs:
         env:
           INSTANCE_ID: ${{ inputs.ec2-instance-id }}
           COMMAND_ID: ${{ steps.send.outputs.command_id }}
+          IMAGE_URI: ${{ inputs.image-uri }}
         run: |
+          if [ -z "$COMMAND_ID" ]; then
+            echo "ERROR: SSM command_id is empty. The send-command step likely failed."
+            exit 1
+          fi
+
           STATUS=$(aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
             --instance-id "$INSTANCE_ID" \
@@ -128,6 +283,7 @@ jobs:
 
           echo "SSM command status: $STATUS"
 
+          echo "--- SSM Standard Output ---"
           aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
             --instance-id "$INSTANCE_ID" \
@@ -135,10 +291,14 @@ jobs:
             --output text
 
           if [ "$STATUS" != "Success" ]; then
+            echo "--- SSM Standard Error ---"
             aws ssm get-command-invocation \
               --command-id "$COMMAND_ID" \
               --instance-id "$INSTANCE_ID" \
               --query "StandardErrorContent" \
               --output text
+            echo "ERROR: Rollout did not reach Success state (status=$STATUS). The EC2 instance may still be running the previous container."
             exit 1
           fi
+
+          echo "Rollout complete: $IMAGE_URI deployed to $INSTANCE_ID"

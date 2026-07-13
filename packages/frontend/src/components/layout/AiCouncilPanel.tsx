@@ -124,7 +124,17 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
 
       if (!response.ok) {
         const errorBody = await response.text();
-        throw new Error(errorBody || `HTTP ${response.status}`);
+        // Aggressive diagnostic logging: the backend may have crashed and
+        // returned 502/500 instead of an SSE stream. Surface the HTTP status
+        // and response body in the browser console so SRE can correlate
+        // frontend failures with backend rollouts / container crashes.
+        console.error("[AI Council] SSE handshake failed", {
+          status: response.status,
+          statusText: response.statusText,
+          url: response.url,
+          body: errorBody.slice(0, 2000),
+        });
+        throw new Error(`HTTP ${response.status} ${response.statusText}: ${errorBody.slice(0, 240) || "AI Council unavailable"}`);
       }
 
       if (!response.body) {
@@ -202,6 +212,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
         err instanceof Error
           ? err.message
           : "AI Agent Team is unavailable. Check DEEPSEEK_API_KEY configuration.";
+      console.error("[AI Council] analyze failed", { symbol, timeframe, error: err });
       setError(message);
     } finally {
       setIsAnalyzing(false);

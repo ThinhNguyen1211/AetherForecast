@@ -57,6 +57,15 @@ DEFAULT_SYMBOLS = [
 BINANCE_SPOT_URL = "https://api.binance.com/api/v3/klines"
 BINANCE_FAPI_BASE = "https://fapi.binance.com"
 
+# A 1h candle is considered stale if its close is older than this many hours.
+# This prevents the cron from re-writing ancient cached data after an S3 wipe.
+MAX_CANDLE_AGE_HOURS = int(os.getenv("MAX_CANDLE_AGE_HOURS", "4"))
+
+# Minimum fraction of symbols that must ingest successfully for the whole run
+# to be considered healthy. Prevents a partial/Binance-degraded run from masking
+# itself as a success.
+MIN_SUCCESS_RATIO = float(os.getenv("MIN_SUCCESS_RATIO", "0.70"))
+
 # TA-Lib import (optional with pure-Python fallback)
 try:
     import talib
@@ -366,6 +375,18 @@ def write_to_s3(df: pd.DataFrame, symbol: str, bucket: str, prefix: str, region:
 # Main Ingestion Pipeline
 # ---------------------------------------------------------------------------
 
+def _is_fresh(df: pd.DataFrame, max_age_hours: int = MAX_CANDLE_AGE_HOURS) -> bool:
+    """Return True if the newest candle in the DataFrame is within the allowed age."""
+    if df.empty or "timestamp" not in df.columns:
+        return False
+    try:
+        newest = pd.to_datetime(df["timestamp"], utc=True).max()
+        age_hours = (pd.Timestamp.now(tz="UTC") - newest).total_seconds() / 3600
+        return age_hours <= max_age_hours
+    except Exception:
+        return False
+
+
 def ingest_symbol(client: httpx.Client, symbol: str, macro_df: pd.DataFrame) -> pd.DataFrame:
     """Full ingestion pipeline for a single symbol."""
     # Step 1: Fetch Spot OHLCV
@@ -375,6 +396,16 @@ def ingest_symbol(client: httpx.Client, symbol: str, macro_df: pd.DataFrame) -> 
         return pd.DataFrame()
 
     ohlcv = ohlcv.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last")
+
+    # Reject stale cached/empty responses that would resurrect "old" data after S3 cleanup.
+    if not _is_fresh(ohlcv):
+        newest = ohlcv["timestamp"].max()
+        logger.warning(
+            "OHLCV data for %s is stale (newest candle %s). Skipping write.",
+            symbol,
+            newest,
+        )
+        return pd.DataFrame()
 
     # Step 2: Fetch Derivatives
     funding = fetch_funding_rate(client, symbol)
@@ -454,10 +485,15 @@ def main() -> None:
 
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()] if args.symbols else DEFAULT_SYMBOLS
 
+    image_uri = os.getenv("BACKEND_IMAGE_URI", "unknown")
+    git_sha = os.getenv("GIT_SHA", "unknown")
+
     logger.info("=" * 60)
     logger.info("AetherForecast Data Ingestion Pipeline")
+    logger.info("Image:    %s | Git SHA: %s", image_uri, git_sha)
     logger.info("Bucket:   s3://%s/%s/", bucket, prefix)
     logger.info("Symbols:  %d | Region: %s | Dry-run: %s", len(symbols), region, args.dry_run)
+    logger.info("Freshness threshold: %s hours | Min success ratio: %.0f%%", MAX_CANDLE_AGE_HOURS, MIN_SUCCESS_RATIO * 100)
     logger.info("Partition: symbol/year/month/day")
     logger.info("=" * 60)
 
@@ -496,11 +532,24 @@ def main() -> None:
             time.sleep(0.2)
 
     elapsed = time.monotonic() - start_time
+    total = len(symbols)
+    success_ratio = success / total if total > 0 else 0.0
     logger.info("=" * 60)
     logger.info("Ingestion complete: %d success, %d failed, %.1fs elapsed", success, failed, elapsed)
+    logger.info("Success ratio: %.1f%% (%d/%d)", success_ratio * 100, success, total)
     logger.info("=" * 60)
 
     if failed > 0 and success == 0:
+        logger.error("All symbols failed ingestion — aborting run.")
+        sys.exit(1)
+
+    if success_ratio < MIN_SUCCESS_RATIO:
+        logger.error(
+            "Ingestion success ratio %.1f%% is below minimum %.0f%%. "
+            "This usually means Binance API is degraded or the symbol list contains delisted pairs.",
+            success_ratio * 100,
+            MIN_SUCCESS_RATIO * 100,
+        )
         sys.exit(1)
 
 
