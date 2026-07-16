@@ -105,7 +105,10 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
     }
 
     try {
-      const response = await fetch("/api/ai/analyze", {
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || "";
+      const cleanBaseUrl = apiBaseUrl.endsWith("/") ? apiBaseUrl.slice(0, -1) : apiBaseUrl;
+
+      const response = await fetch(`${cleanBaseUrl}/api/ai/analyze`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
