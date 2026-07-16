@@ -66,13 +66,6 @@ class MarketContext(BaseModel):
     timeframe: str = Field(default="1h")
 
 
-class AiAnalyzeRequest(BaseModel):
-    """POST /api/ai/analyze request body."""
-
-    symbol: str = Field(description="Trading pair e.g. BTCUSDT")
-    timeframe: str = Field(default="1h")
-
-
 # ---------------------------------------------------------------------------
 # Agent Definitions
 # ---------------------------------------------------------------------------

@@ -19,10 +19,11 @@ from fastapi.responses import StreamingResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from pydantic import BaseModel, Field
+
 from src.dependencies.cognito import require_authenticated_user
 from src.dependencies.s3_client import S3ParquetClient, get_s3_parquet_client
 from src.ml.agents.crew import (
-    AiAnalyzeRequest,
     MarketContext,
     run_trading_crew_streaming,
 )
@@ -48,6 +49,18 @@ def _error_stream(message: str, exc: Exception | None = None) -> Generator[str, 
     if exc is not None:
         error_tb = traceback.format_exc().replace("\n", " | ")
         yield _sse_error(f"[TRACE]:{error_tb}")
+
+
+class AiAnalyzeRequest(BaseModel):
+    """POST /api/ai/analyze request body."""
+
+    symbol: str = Field(description="Trading pair e.g. BTCUSDT")
+    timeframe: str = Field(default="1h")
+
+
+# Force Pydantic V2 to fully resolve this model before FastAPI builds the
+# route TypeAdapter. Prevents the ForwardRef crash on startup.
+AiAnalyzeRequest.model_rebuild()
 
 
 @router.post("/analyze")
