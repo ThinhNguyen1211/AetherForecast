@@ -7,8 +7,6 @@ Final event contains [FINAL_RESULT]:<TradeDecision JSON>.
 Rate limited to 5 requests per hour per IP.
 """
 
-from __future__ import annotations
-
 import logging
 import traceback
 from collections.abc import Generator
