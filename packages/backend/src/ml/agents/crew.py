@@ -81,13 +81,28 @@ def _get_deepseek_api_key() -> str:
     return api_key
 
 
+def _normalize_deepseek_model(model: str) -> str:
+    """Ensure DeepSeek model names carry the LiteLLM provider prefix.
+
+    CrewAI uses LiteLLM under the hood, which requires 'provider/model'.
+    Without the prefix LiteLLM raises:
+      BadRequestError: LLM Provider NOT provided. You passed model=deepseek-chat
+    """
+    model = model.strip()
+    if model and "/" not in model and model.startswith("deepseek-"):
+        return f"deepseek/{model}"
+    return model
+
+
 def _build_chat_llm() -> Any:
     """Build DeepSeek-Chat LLM (fast/cost-optimized).
 
     Used by Quant Analyst & Risk Manager.
     """
     api_key = _get_deepseek_api_key()
-    model = os.environ.get("DEEPSEEK_CHAT_MODEL", "deepseek-chat")
+    model = _normalize_deepseek_model(
+        os.environ.get("DEEPSEEK_CHAT_MODEL", "deepseek/deepseek-chat")
+    )
     logger.info("Initializing DeepSeek Chat LLM: model=%s", model)
 
     return ChatOpenAI(
@@ -105,7 +120,9 @@ def _build_reasoner_llm() -> Any:
     Used by Execution Judge for final decision making.
     """
     api_key = _get_deepseek_api_key()
-    model = os.environ.get("DEEPSEEK_REASONER_MODEL", "deepseek-reasoner")
+    model = _normalize_deepseek_model(
+        os.environ.get("DEEPSEEK_REASONER_MODEL", "deepseek/deepseek-reasoner")
+    )
     logger.info("Initializing DeepSeek Reasoner LLM: model=%s", model)
 
     return ChatOpenAI(
