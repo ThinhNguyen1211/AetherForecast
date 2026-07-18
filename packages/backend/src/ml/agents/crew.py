@@ -2,7 +2,7 @@
 
 3 agents: Quant Analyst, Risk Manager, Execution Judge.
 Input: market JSON (price, forecast, volatility, sentiment).
-Output: TradeDecision Pydantic schema (LONG/SHORT/HOLD + entry/SL/TP/leverage/reasoning).
+Output: AiCouncilDecision Pydantic schema (LONG/SHORT/HOLD + entry/SL/TP/leverage/reasoning).
 LLM: DeepSeek via langchain-openai (OpenAI-compatible). Hybrid routing:
   - Quant Analyst & Risk Manager → deepseek-chat (speed/cost)
   - Execution Judge → deepseek-reasoner (deep logic)
@@ -11,8 +11,6 @@ Configurable via DEEPSEEK_API_KEY env.
 Supports streaming via `run_trading_crew_streaming()` which yields SSE events
 in real-time as each agent produces output.
 """
-
-from __future__ import annotations
 
 import json
 import logging
@@ -39,15 +37,33 @@ class TradeAction(str, Enum):
     HOLD = "HOLD"
 
 
-class TradeDecision(BaseModel):
-    """Final trading decision output from the CrewAI pipeline."""
+class RiskProfile(str, Enum):
+    CONSERVATIVE = "CONSERVATIVE"
+    BALANCED = "BALANCED"
+    DEGEN = "DEGEN"
+
+
+class AiCouncilDecision(BaseModel):
+    """Final pro-trader decision output from the CrewAI pipeline."""
 
     action: TradeAction = Field(description="LONG, SHORT, or HOLD")
-    entry: float = Field(description="Suggested entry price (0 if HOLD)")
-    leverage: int = Field(ge=1, le=125, description="Leverage multiplier (1 = spot)")
-    stop_loss: float = Field(description="Stop-loss price (0 if HOLD)")
-    take_profit: float = Field(description="Take-profit price (0 if HOLD)")
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence score [0,1]")
+    entry: float = Field(description="Suggested entry price (0 if HOLD)")
+    entry_condition: str = Field(
+        default="Market Order",
+        description="How to enter, e.g. 'Market Order' or 'Wait for 1H close above X'",
+    )
+    leverage: int = Field(ge=1, le=125, description="Leverage multiplier (1 = spot)")
+    position_size_pct: float = Field(
+        ge=0.0, le=100.0, description="Position size as percent of portfolio (e.g. 2.0 = 2%)"
+    )
+    stop_loss: float = Field(description="Stop-loss price (0 if HOLD)")
+    invalidation_point: str = Field(
+        default="",
+        description="Macro/technical condition that invalidates the trade, e.g. 'Close if DXY breaks 106'",
+    )
+    take_profit_1: float = Field(description="Safe take-profit for 50% of position (0 if HOLD)")
+    take_profit_2: float = Field(description="Aggressive take-profit for remaining 50% (0 if HOLD)")
     reasoning: str = Field(description="Concise human-readable rationale")
 
 
@@ -64,6 +80,15 @@ class MarketContext(BaseModel):
     funding_rate: float = Field(default=0.0, description="Current funding rate")
     fear_greed_index: float = Field(default=50.0, ge=0.0, le=100.0)
     timeframe: str = Field(default="1h")
+    risk_profile: RiskProfile = Field(
+        default=RiskProfile.BALANCED, description="Trader risk profile"
+    )
+
+
+# Force Pydantic V2 to fully resolve these models before they are used by
+# FastAPI route TypeAdapters or CrewAI task outputs. Prevents ForwardRef crashes.
+AiCouncilDecision.model_rebuild()
+MarketContext.model_rebuild()
 
 
 # ---------------------------------------------------------------------------
@@ -154,20 +179,29 @@ def _quant_analyst_agent(llm: Any) -> Any:
     )
 
 
-def _risk_manager_agent(llm: Any) -> Any:
+def _risk_manager_agent(llm: Any, risk_profile: RiskProfile) -> Any:
     """Reads sentiment, funding rate, FnG — can veto or reduce exposure."""
+    leverage_rule = {
+        RiskProfile.CONSERVATIVE: "Leverage MUST be between 2x and 10x (inclusive).",
+        RiskProfile.BALANCED: "Leverage MUST be between 11x and 40x (inclusive).",
+        RiskProfile.DEGEN: "Leverage MUST be between 41x and 125x (inclusive).",
+    }[risk_profile]
+
     return Agent(
         role="Risk Manager",
         goal=(
             "Evaluate market risk using sentiment, funding rate, and fear/greed index. "
             "Determine if the proposed trade should be blocked, reduced, or approved. "
-            "Set appropriate leverage and stop-loss levels."
+            "Set appropriate leverage, stop-loss, position size, and invalidation point."
         ),
         backstory=(
             "You are the Chief Risk Officer of a crypto trading desk. "
             "Your job is to protect capital. You are conservative and skeptical. "
             "If sentiment is extreme or funding rate signals crowded positioning, "
-            "you reduce leverage or veto the trade entirely."
+            "you reduce leverage or veto the trade entirely. "
+            f"The current trader risk profile is {risk_profile.value}. STRICT RULE: {leverage_rule} "
+            "Never recommend leverage outside this range. Also define position_size_pct, "
+            "invalidation_point, and split take-profit levels (take_profit_1 safe, take_profit_2 aggressive)."
         ),
         llm=llm,
         verbose=False,
@@ -176,13 +210,14 @@ def _risk_manager_agent(llm: Any) -> Any:
 
 
 def _execution_judge_agent(llm: Any) -> Any:
-    """Final arbiter — synthesizes Quant + Risk into a single TradeDecision."""
+    """Final arbiter — synthesizes Quant + Risk into a single AiCouncilDecision."""
     return Agent(
         role="Execution Judge",
         goal=(
             "Synthesize the Quant Analyst's directional signal and the Risk Manager's "
-            "risk assessment into a final trade decision. Output a single JSON object "
-            "with action, entry, leverage, stop_loss, take_profit, confidence, reasoning."
+            "risk assessment into a final pro-trader decision. Output a single JSON object "
+            "with action, confidence, entry, entry_condition, leverage, position_size_pct, "
+            "stop_loss, invalidation_point, take_profit_1, take_profit_2, reasoning."
         ),
         backstory=(
             "You are the Head of Execution at a systematic trading firm. "
@@ -207,39 +242,51 @@ def _build_tasks(
 ) -> list[Any]:
     """Create the 3-step task pipeline."""
     market_json = market.model_dump_json(indent=2)
+    risk_profile = market.risk_profile
 
     quant_task = Task(
         description=(
-            f"Analyze the following market data and Chronos-2 forecast:\n\n"
+            f"Analyze the following market data and Chronos-2 forecast (Risk Profile: {risk_profile.value}):\n\n"
             f"```json\n{market_json}\n```\n\n"
             "Provide:\n"
             "1. Directional bias: LONG, SHORT, or NEUTRAL\n"
             "2. Confidence score (0-1)\n"
             "3. Suggested entry price\n"
-            "4. Initial stop-loss and take-profit levels\n"
-            "5. Brief technical reasoning (2-3 sentences)\n\n"
+            "4. Entry condition: how to enter, e.g. 'Market Order' or 'Wait for 1H close above X'\n"
+            "5. Initial stop-loss price\n"
+            "6. Two take-profit levels: take_profit_1 (safe/conservative) and take_profit_2 (aggressive/moon)\n"
+            "7. Invalidation point: macro/technical condition that would invalidate the setup\n"
+            "8. Brief technical reasoning (2-3 sentences)\n\n"
             "Consider the forecast bands (P5-P95), current price relative to forecast median, "
             "and realized volatility for position sizing."
         ),
         expected_output=(
-            "JSON with keys: bias, confidence, entry, stop_loss, take_profit, reasoning"
+            "JSON with keys: bias, confidence, entry, entry_condition, stop_loss, "
+            "take_profit_1, take_profit_2, invalidation_point, reasoning"
         ),
         agent=quant,
     )
 
     risk_task = Task(
         description=(
-            "Review the Quant Analyst's trade proposal against risk factors:\n\n"
+            "Review the Quant Analyst's trade proposal against risk factors. "
+            f"The trader's risk profile is {risk_profile.value}.\n\n"
             f"Market context:\n```json\n{market_json}\n```\n\n"
             "Evaluate:\n"
             "1. Sentiment score: extreme values (> 0.7 or < -0.7) signal caution\n"
             "2. Funding rate: high positive = crowded longs, high negative = crowded shorts\n"
             "3. Fear/Greed Index: extreme fear (< 20) or extreme greed (> 80) = caution\n"
-            "4. Realized volatility: high vol = reduce leverage\n\n"
-            "Output: approved/reduced/vetoed, adjusted leverage (1-20), adjusted stop-loss, reasoning"
+            "4. Realized volatility: high vol = reduce leverage / position size\n\n"
+            "STRICT LEVERAGE BOUNDS:\n"
+            "- CONSERVATIVE: leverage must be 2x-10x\n"
+            "- BALANCED: leverage must be 11x-40x\n"
+            "- DEGEN: leverage must be 41x-125x\n\n"
+            "Output: approved/reduced/vetoed, adjusted leverage (respect bounds), "
+            "adjusted stop-loss, position_size_pct, invalidation_point, take_profit_1, take_profit_2, reasoning"
         ),
         expected_output=(
-            "JSON with keys: verdict (approved/reduced/vetoed), leverage, stop_loss, reasoning"
+            "JSON with keys: verdict (approved/reduced/vetoed), leverage, stop_loss, "
+            "position_size_pct, invalidation_point, take_profit_1, take_profit_2, reasoning"
         ),
         agent=risk,
         context=[quant_task],
@@ -248,24 +295,30 @@ def _build_tasks(
     judge_task = Task(
         description=(
             "You have the Quant Analyst's signal and the Risk Manager's assessment. "
-            "Make the final trade decision.\n\n"
+            f"The trader's risk profile is {risk_profile.value}. "
+            "Make the final pro-trader trade decision.\n\n"
             "Output EXACTLY this JSON structure (no markdown, no explanation outside JSON):\n"
             '{\n'
             '  "action": "LONG" | "SHORT" | "HOLD",\n'
-            '  "entry": <float>,\n'
-            '  "leverage": <int 1-125>,\n'
-            '  "stop_loss": <float>,\n'
-            '  "take_profit": <float>,\n'
             '  "confidence": <float 0-1>,\n'
+            '  "entry": <float>,\n'
+            '  "entry_condition": "<e.g. Market Order or Wait for 1H close above X>",\n'
+            '  "leverage": <int within profile bounds>,\n'
+            '  "position_size_pct": <float e.g. 2.0 for 2%>,\n'
+            '  "stop_loss": <float>,\n'
+            '  "invalidation_point": "<macro/technical invalidation>",\n'
+            '  "take_profit_1": <float>,\n'
+            '  "take_profit_2": <float>,\n'
             '  "reasoning": "<concise string>"\n'
             "}\n\n"
             "Rules:\n"
-            "- If Risk Manager vetoed, action MUST be HOLD with entry/SL/TP = 0\n"
+            "- If Risk Manager vetoed, action MUST be HOLD with entry/SL/TPs = 0\n"
             "- If reduced, apply the Risk Manager's leverage and stop-loss adjustments\n"
+            "- Leverage MUST respect the risk profile bounds\n"
             "- Confidence reflects your conviction after both analyses\n"
             "- Reasoning should be 1-2 sentences max"
         ),
-        expected_output="A single valid JSON object matching the TradeDecision schema.",
+        expected_output="A single valid JSON object matching the AiCouncilDecision schema.",
         agent=judge,
         context=[quant_task, risk_task],
     )
@@ -277,8 +330,8 @@ def _build_tasks(
 # Parse final output
 # ---------------------------------------------------------------------------
 
-def _parse_trade_decision(raw_output: str) -> TradeDecision:
-    """Parse CrewAI's raw text output into a TradeDecision."""
+def _parse_trade_decision(raw_output: str) -> AiCouncilDecision:
+    """Parse CrewAI's raw text output into an AiCouncilDecision."""
     try:
         json_start = raw_output.find("{")
         json_end = raw_output.rfind("}") + 1
@@ -287,16 +340,20 @@ def _parse_trade_decision(raw_output: str) -> TradeDecision:
         else:
             parsed = json.loads(raw_output)
 
-        return TradeDecision(**parsed)
+        return AiCouncilDecision(**parsed)
     except (json.JSONDecodeError, ValueError) as exc:
         logger.warning("Failed to parse CrewAI output: %s | raw: %s", exc, raw_output[:500])
-        return TradeDecision(
+        return AiCouncilDecision(
             action=TradeAction.HOLD,
-            entry=0.0,
-            leverage=1,
-            stop_loss=0.0,
-            take_profit=0.0,
             confidence=0.0,
+            entry=0.0,
+            entry_condition="",
+            leverage=1,
+            position_size_pct=0.0,
+            stop_loss=0.0,
+            invalidation_point="",
+            take_profit_1=0.0,
+            take_profit_2=0.0,
             reasoning=f"CrewAI output parsing failed: {exc}",
         )
 
@@ -321,7 +378,7 @@ def run_trading_crew_streaming(
 
     Yields:
         SSE-formatted strings (`data: ...\n\n`).
-        The final event contains `[FINAL_RESULT]:<json>` for the TradeDecision.
+        The final event contains `[FINAL_RESULT]:<json>` for the AiCouncilDecision.
     """
     event_queue: Queue[str | object] = Queue()
 
@@ -376,7 +433,7 @@ def run_trading_crew_streaming(
 
             # --- Phase 2: Agent & Task Construction ---
             quant = _quant_analyst_agent(chat_llm)
-            risk = _risk_manager_agent(chat_llm)
+            risk = _risk_manager_agent(chat_llm, market.risk_profile)
             judge = _execution_judge_agent(reasoner_llm)
             tasks = _build_tasks(quant, risk, judge, market)
 
@@ -481,8 +538,8 @@ def run_trading_crew_streaming(
 # Legacy synchronous API (kept for backwards compat / tests)
 # ---------------------------------------------------------------------------
 
-def run_trading_crew(market: MarketContext) -> TradeDecision:
-    """Execute the 3-agent CrewAI pipeline and return a structured TradeDecision.
+def run_trading_crew(market: MarketContext) -> AiCouncilDecision:
+    """Execute the 3-agent CrewAI pipeline and return a structured AiCouncilDecision.
 
     Raises RuntimeError if DEEPSEEK_API_KEY is missing.
     """
@@ -490,7 +547,7 @@ def run_trading_crew(market: MarketContext) -> TradeDecision:
     reasoner_llm = _build_reasoner_llm()
 
     quant = _quant_analyst_agent(chat_llm)
-    risk = _risk_manager_agent(chat_llm)
+    risk = _risk_manager_agent(chat_llm, market.risk_profile)
     judge = _execution_judge_agent(reasoner_llm)
 
     tasks = _build_tasks(quant, risk, judge, market)

@@ -115,7 +115,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
           Accept: "text/event-stream",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ symbol, timeframe }),
+        body: JSON.stringify({ symbol, timeframe, risk_profile: "BALANCED" }),
         signal: controller.signal,
       });
 
@@ -309,45 +309,71 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
             </div>
           </div>
 
-          {/* Entry / SL / TP / Leverage grid */}
+          {/* ADVANCED TRADING RESULT CARD */}
           {finalDecision.action !== "HOLD" && (
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="rounded-lg border border-violet-400/20 bg-cosmic-900/50 p-2.5">
-                <p className="text-[10px] font-medium uppercase tracking-wider text-violet-200/50">Entry Price</p>
-                <p className="mt-1 text-base font-bold text-cyan-200">
-                  ${finalDecision.entry.toLocaleString(undefined, { maximumFractionDigits: 6 })}
-                </p>
+            <div className="mt-4 space-y-3">
+              {/* BLOCK 1: ENTRY & RISK MANAGEMENT */}
+              <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="col-span-2 rounded-lg border border-cyan-400/20 bg-cyan-900/10 p-2.5">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-cyan-200/50">Entry Zone & Timing</p>
+                  <p className="mt-1 text-base font-bold text-cyan-300">
+                    ${finalDecision.entry.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                  </p>
+                  <p className="mt-1 text-[10px] italic text-cyan-200/70 border-t border-cyan-400/10 pt-1">
+                    ⚡ {finalDecision.entry_condition}
+                  </p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <div className="rounded-lg border border-violet-400/20 bg-violet-900/20 p-2 flex-1 flex flex-col justify-center items-center">
+                    <p className="text-[9px] font-medium uppercase text-violet-200/50">Leverage</p>
+                    <p className="font-bold text-violet-300">{finalDecision.leverage}×</p>
+                  </div>
+                  <div className="rounded-lg border border-amber-400/20 bg-amber-900/20 p-2 flex-1 flex flex-col justify-center items-center">
+                    <p className="text-[9px] font-medium uppercase text-amber-200/50">Pos Size</p>
+                    <p className="font-bold text-amber-300">{finalDecision.position_size_pct}%</p>
+                  </div>
+                </div>
               </div>
-              <div className="rounded-lg border border-violet-400/20 bg-cosmic-900/50 p-2.5">
-                <p className="text-[10px] font-medium uppercase tracking-wider text-violet-200/50">Leverage</p>
-                <p className="mt-1 text-base font-bold text-cyan-200">{finalDecision.leverage}×</p>
-              </div>
-              <div className="rounded-lg border border-red-400/15 bg-red-500/5 p-2.5">
-                <p className="text-[10px] font-medium uppercase tracking-wider text-red-300/50">Stop Loss</p>
-                <p className="mt-1 text-base font-bold text-red-300">
-                  ${finalDecision.stop_loss.toLocaleString(undefined, { maximumFractionDigits: 6 })}
-                </p>
-              </div>
-              <div className="rounded-lg border border-emerald-400/15 bg-emerald-500/5 p-2.5">
-                <p className="text-[10px] font-medium uppercase tracking-wider text-emerald-300/50">Take Profit</p>
-                <p className="mt-1 text-base font-bold text-emerald-300">
-                  ${finalDecision.take_profit.toLocaleString(undefined, { maximumFractionDigits: 6 })}
-                </p>
-              </div>
-            </div>
-          )}
 
-          {/* Risk/Reward Ratio */}
-          {finalDecision.action !== "HOLD" && finalDecision.stop_loss > 0 && finalDecision.take_profit > 0 && (
-            <div className="rounded-lg border border-violet-400/15 bg-cosmic-900/40 p-2.5">
-              <p className="text-[10px] font-medium uppercase tracking-wider text-violet-200/50">Risk / Reward Ratio</p>
-              <p className="mt-0.5 text-sm font-bold text-violet-200">
-                1 :{" "}
-                {Math.abs(
-                  (finalDecision.take_profit - finalDecision.entry) /
-                  (finalDecision.entry - finalDecision.stop_loss || 1)
-                ).toFixed(2)}
-              </p>
+              {/* BLOCK 2: DUAL TAKE PROFIT */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-lg border border-emerald-400/15 bg-emerald-500/5 p-2.5 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 bg-emerald-500/20 px-2 py-0.5 rounded-bl-lg text-[9px] text-emerald-300">TP 1 (Safe)</div>
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-emerald-300/50">Take Profit 1</p>
+                  <p className="mt-1 text-base font-bold text-emerald-400">
+                    ${finalDecision.take_profit_1.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-2.5 relative shadow-[0_0_10px_rgba(16,185,129,0.1)]">
+                  <div className="absolute top-0 right-0 bg-emerald-500/30 px-2 py-0.5 rounded-bl-lg text-[9px] text-emerald-200 font-bold">TP 2 (Moon)</div>
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-emerald-300/50">Take Profit 2</p>
+                  <p className="mt-1 text-base font-bold text-emerald-300">
+                    ${finalDecision.take_profit_2.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                  </p>
+                </div>
+              </div>
+
+              {/* BLOCK 3: DEFENSE & INVALIDATION */}
+              <div className="rounded-lg border border-red-400/20 bg-red-900/10 p-2.5 text-xs">
+                 <div className="flex justify-between items-end border-b border-red-400/10 pb-2 mb-2">
+                    <div>
+                      <p className="text-[10px] font-medium uppercase tracking-wider text-red-300/50">Hard Stop Loss</p>
+                      <p className="mt-0.5 text-lg font-bold text-red-400">
+                        ${finalDecision.stop_loss.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[9px] uppercase text-violet-200/40">Risk/Reward (TP1)</p>
+                      <p className="text-sm font-bold text-violet-300">
+                        1 : {Math.abs((finalDecision.take_profit_1 - finalDecision.entry) / (finalDecision.entry - finalDecision.stop_loss || 1)).toFixed(2)}
+                      </p>
+                    </div>
+                 </div>
+                 <div>
+                    <p className="text-[9px] font-medium uppercase text-red-300/40">⚠️ Invalidation Point:</p>
+                    <p className="mt-0.5 text-[11px] text-red-200/70">{finalDecision.invalidation_point}</p>
+                 </div>
+              </div>
             </div>
           )}
 

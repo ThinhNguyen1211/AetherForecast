@@ -3,7 +3,7 @@
 Pulls latest candles + Chronos-2 forecast + sentiment for the given symbol,
 then runs the 3-agent CrewAI pipeline (Quant → Risk → Judge).
 Streams agent thoughts in real-time via Server-Sent Events.
-Final event contains [FINAL_RESULT]:<TradeDecision JSON>.
+Final event contains [FINAL_RESULT]:<AiCouncilDecision JSON>.
 Rate limited to 5 requests per hour per IP.
 """
 
@@ -23,6 +23,7 @@ from src.dependencies.cognito import require_authenticated_user
 from src.dependencies.s3_client import S3ParquetClient, get_s3_parquet_client
 from src.ml.agents.crew import (
     MarketContext,
+    RiskProfile,
     run_trading_crew_streaming,
 )
 from src.ml.inference import ForecastInferenceService, get_inference_service
@@ -54,6 +55,10 @@ class AiAnalyzeRequest(BaseModel):
 
     symbol: str = Field(description="Trading pair e.g. BTCUSDT")
     timeframe: str = Field(default="1h")
+    risk_profile: RiskProfile = Field(
+        default=RiskProfile.BALANCED,
+        description="Risk profile: CONSERVATIVE, BALANCED, or DEGEN",
+    )
 
 
 # Force Pydantic V2 to fully resolve this model before FastAPI builds the
@@ -142,6 +147,7 @@ async def ai_analyze(
             sentiment_score=forecast.sentiment_score,
             fear_greed_index=50.0,  # will be enriched by sentiment scorer if available
             timeframe=timeframe,
+            risk_profile=payload.risk_profile,
         )
 
         # --- Step 4: Stream CrewAI pipeline via SSE ---

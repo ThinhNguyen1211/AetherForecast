@@ -561,10 +561,14 @@ export type TradeAction = "LONG" | "SHORT" | "HOLD";
 
 export interface AiCouncilDecision {
   action: TradeAction;
-  entry: number;
-  leverage: number;
-  stop_loss: number;
-  take_profit: number;
   confidence: number;
+  entry: number;
+  entry_condition: string;
+  leverage: number;
+  position_size_pct: number;
+  stop_loss: number;
+  invalidation_point: string;
+  take_profit_1: number;
+  take_profit_2: number;
   reasoning: string;
 }
