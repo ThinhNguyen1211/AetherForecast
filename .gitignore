@@ -57,8 +57,6 @@ temp/
 # Project artifacts / local run outputs
 artifacts/
 packages/backend/artifacts/
-Prediction_Report/*
-!Prediction_Report/.gitkeep
 train-gpu/Include/
 train-gpu/Lib/
 train-gpu/Scripts/

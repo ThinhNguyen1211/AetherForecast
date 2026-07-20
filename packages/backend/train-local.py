@@ -179,7 +179,7 @@ def _load_train_entrypoint():
         if os.getenv(REEXEC_GUARD_ENV) == "1":
             raise RuntimeError(
                 f"Missing Python dependency '{missing_module}' in interpreter '{sys.executable}'. "
-                "Install project requirements into this environment or run scripts/run-train-gpu.bat."
+                "Install project requirements into this environment or activate the train-gpu virtual environment."
             ) from exc
 
         if train_gpu_python.exists():

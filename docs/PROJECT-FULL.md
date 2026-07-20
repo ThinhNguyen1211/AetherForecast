@@ -175,9 +175,8 @@ AetherForecast/
 
 ### 8.1 Training entrypoints
 - `packages/backend/ml/training/train.py`: pipeline chính.
-- `train-local.py`: wrapper training local + promote manifest.
-- `scripts/run-train-gpu.bat`: chạy train local với GPU venv.
-- `scripts/start-training.sh`: chạy training trên Training EC2 qua SSM.
+- `packages/backend/train-local.py`: wrapper training local + promote manifest.
+- Training trên Training EC2 duoc trigger qua AWS Batch job definition hoac SSM truc tiep.
 
 ### 8.2 Training flow
 1. Load parquet từ S3 (multi-timeframe resample nếu cần).
@@ -270,10 +269,8 @@ AetherForecast/
 
 ## 12) Ops scripts
 
-- `scripts/deploy-e2e.ps1`: build/push/deploy end-to-end + outputs.
-- `scripts/af-ops.ps1`: health, logs, cron, train, alarms, SSM.
 - `scripts/post-deploy-health-check.sh`: health + docs + ws check.
-- `scripts/start-training.sh` + `stop-training.sh`: training EC2 lifecycle.
+- Cac wrapper PowerShell cu (`deploy-e2e.ps1`, `af-ops.ps1`) va script lifecycle EC2 training (`start-training.sh`, `stop-training.sh`) da duoc loai bo; dung CDK CLI/AWS CLI truc tiep.
 
 ---
 
