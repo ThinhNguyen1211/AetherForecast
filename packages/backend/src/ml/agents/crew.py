@@ -53,7 +53,7 @@ class AiCouncilDecision(BaseModel):
         default="Market Order",
         description="How to enter, e.g. 'Market Order' or 'Wait for 1H close above X'",
     )
-    leverage: int = Field(ge=1, le=125, description="Leverage multiplier (1 = spot)")
+    leverage: int = Field(ge=0, le=125, description="Leverage multiplier (0 if HOLD, 1 = spot)")
     position_size_pct: float = Field(
         ge=0.0, le=100.0, description="Position size as percent of portfolio (e.g. 2.0 = 2%)"
     )

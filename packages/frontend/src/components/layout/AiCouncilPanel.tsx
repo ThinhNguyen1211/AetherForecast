@@ -382,7 +382,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
             <p className="text-[10px] font-semibold uppercase tracking-wider text-violet-200/50 mb-2">
               Council Reasoning
             </p>
-            <p className="text-xs leading-relaxed text-violet-100/90">
+            <p className="text-xs leading-relaxed text-violet-100/90 break-words whitespace-pre-wrap">
               {finalDecision.reasoning}
             </p>
           </div>
