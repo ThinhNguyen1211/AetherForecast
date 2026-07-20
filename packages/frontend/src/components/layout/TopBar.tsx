@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 import { Timeframe } from "@/services/api";
 import logoEye from "@/assets/logo-eye.svg";
 
@@ -34,7 +36,13 @@ export default function TopBar({
   onOpenAuthModal,
   onSignOut,
 }: TopBarProps) {
+  const { i18n } = useTranslation();
   const isPositive = (changePct ?? 0) >= 0;
+
+  const toggleLanguage = () => {
+    const nextLang = i18n.language === "vi" ? "en" : "vi";
+    void i18n.changeLanguage(nextLang);
+  };
 
   return (
     <header className="glass-panel rounded-2xl px-4 py-3">
@@ -93,6 +101,14 @@ export default function TopBar({
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleLanguage}
+            className="rounded-lg border border-violet-400/35 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-100 transition hover:bg-violet-500/20"
+            aria-label="Toggle language"
+          >
+            {i18n.language === "vi" ? "VI / EN" : "EN / VI"}
+          </button>
           <span
             className={`rounded-full border px-3 py-1 text-xs ${
               apiStatus === "online"

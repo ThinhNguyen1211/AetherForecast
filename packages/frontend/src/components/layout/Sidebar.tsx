@@ -16,7 +16,7 @@ export default function Sidebar({
   onSelectSymbol,
 }: SidebarProps) {
   return (
-    <aside className="glass-panel flex h-[72vh] min-h-[28rem] flex-col rounded-2xl p-3 lg:h-[calc(100vh-10.5rem)]">
+    <aside className="glass-panel flex h-full flex-col rounded-2xl p-3">
       <div>
         <p className="muted-label">Markets</p>
         <input

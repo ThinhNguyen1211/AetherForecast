@@ -70,7 +70,7 @@ export default function PredictionPanel({
   const isUp = (deltaPct ?? 0) >= 0;
 
   return (
-    <section className="glass-panel scrollbar-slim flex h-[72vh] min-h-[28rem] flex-col overflow-y-auto rounded-2xl p-4 lg:h-[calc(100vh-10.5rem)]">
+    <section className="glass-panel scrollbar-slim flex h-full flex-col overflow-y-auto rounded-2xl p-4">
       <div>
         <p className="muted-label">Prediction</p>
         <h2 className="mt-1 text-xl font-semibold text-violet-100">{symbol} Forecast</h2>

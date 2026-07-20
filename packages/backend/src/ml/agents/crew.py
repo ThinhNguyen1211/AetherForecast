@@ -19,7 +19,7 @@ import threading
 import traceback
 from enum import Enum
 from queue import Empty, Queue
-from typing import Any, Generator
+from typing import Any, Generator, Literal
 
 from crewai import Agent, Crew, Process, Task
 from langchain_openai import ChatOpenAI
@@ -82,6 +82,9 @@ class MarketContext(BaseModel):
     timeframe: str = Field(default="1h")
     risk_profile: RiskProfile = Field(
         default=RiskProfile.BALANCED, description="Trader risk profile"
+    )
+    language: Literal["en", "vi"] = Field(
+        default="vi", description="Language for the final reasoning field"
     )
 
 
@@ -316,7 +319,9 @@ def _build_tasks(
             "- If reduced, apply the Risk Manager's leverage and stop-loss adjustments\n"
             "- Leverage MUST respect the risk profile bounds\n"
             "- Confidence reflects your conviction after both analyses\n"
-            "- Reasoning should be 1-2 sentences max"
+            "- Reasoning should be 1-2 sentences max\n"
+            f"- The final 'reasoning' field in the JSON MUST be written in {market.language} "
+            "(if 'vi' use Vietnamese, if 'en' use English). All other keys and processes remain in English."
         ),
         expected_output="A single valid JSON object matching the AiCouncilDecision schema.",
         agent=judge,

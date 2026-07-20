@@ -17,6 +17,8 @@ from fastapi.responses import StreamingResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from src.dependencies.cognito import require_authenticated_user
@@ -58,6 +60,10 @@ class AiAnalyzeRequest(BaseModel):
     risk_profile: RiskProfile = Field(
         default=RiskProfile.BALANCED,
         description="Risk profile: CONSERVATIVE, BALANCED, or DEGEN",
+    )
+    language: Literal["en", "vi"] = Field(
+        default="vi",
+        description="Language for the final reasoning field: en (English) or vi (Vietnamese)",
     )
 
 
@@ -148,6 +154,7 @@ async def ai_analyze(
             fear_greed_index=50.0,  # will be enriched by sentiment scorer if available
             timeframe=timeframe,
             risk_profile=payload.risk_profile,
+            language=payload.language,
         )
 
         # --- Step 4: Stream CrewAI pipeline via SSE ---

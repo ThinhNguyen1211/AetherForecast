@@ -1459,8 +1459,8 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="cosmic-shell p-3 lg:p-4">
-      <div className="mx-auto flex max-w-[1880px] flex-col gap-4">
+    <div className="cosmic-shell flex h-screen flex-col overflow-hidden p-3 lg:p-4">
+      <div className="mx-auto flex h-full max-w-[1880px] flex-col gap-4">
         <TopBar
           symbolSearch={searchQuery}
           onSymbolSearchChange={setSearchQuery}
@@ -1483,17 +1483,19 @@ export default function Dashboard() {
           </div>
         )}
 
-        <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_360px]">
-          <Sidebar
-            symbols={filteredSymbols}
-            selectedSymbol={symbol}
-            searchQuery={searchQuery}
-            loading={loadingSymbols}
-            onSearchQueryChange={setSearchQuery}
-            onSelectSymbol={setSymbol}
-          />
+        <div className="grid flex-1 min-h-0 gap-4 lg:grid-cols-[280px_minmax(0,1fr)_360px] lg:items-stretch">
+          <div className="flex h-full min-h-0 flex-col overflow-y-auto scrollbar-slim">
+            <Sidebar
+              symbols={filteredSymbols}
+              selectedSymbol={symbol}
+              searchQuery={searchQuery}
+              loading={loadingSymbols}
+              onSearchQueryChange={setSearchQuery}
+              onSelectSymbol={setSymbol}
+            />
+          </div>
 
-          <section className="glass-panel rounded-2xl p-3 lg:p-4">
+          <section className="glass-panel flex h-full min-w-0 flex-col rounded-2xl p-3 lg:p-4">
             <div className="mb-3 flex items-center justify-between gap-4 rounded-lg border border-violet-400/20 bg-cosmic-900/45 px-3 py-2">
               <div>
                 <p className="muted-label">Chart</p>
@@ -1539,20 +1541,22 @@ export default function Dashboard() {
             />
           </section>
 
-          <PredictionPanel
-            symbol={symbol}
-            timeframe={timeframe}
-            lastPrice={binanceMarkPrice ?? ticker.price}
-            prediction={prediction}
-            horizonOptions={FORECAST_HORIZON_OPTIONS}
-            selectedHorizonHours={selectedHorizonHours}
-            selectedHorizonBars={selectedHorizonBars}
-            loading={loadingPrediction}
-            predictionProgress={predictionProgress}
-            activePredictionStage={activePredictionStage}
-            onSelectHorizon={setSelectedHorizonHours}
-            onPredict={runPrediction}
-          />
+          <div className="flex h-full min-h-0 flex-col overflow-y-auto scrollbar-slim">
+            <PredictionPanel
+              symbol={symbol}
+              timeframe={timeframe}
+              lastPrice={binanceMarkPrice ?? ticker.price}
+              prediction={prediction}
+              horizonOptions={FORECAST_HORIZON_OPTIONS}
+              selectedHorizonHours={selectedHorizonHours}
+              selectedHorizonBars={selectedHorizonBars}
+              loading={loadingPrediction}
+              predictionProgress={predictionProgress}
+              activePredictionStage={activePredictionStage}
+              onSelectHorizon={setSelectedHorizonHours}
+              onPredict={runPrediction}
+            />
+          </div>
         </div>
       </div>
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { getAuthToken, Timeframe, TradeAction, AiCouncilDecision } from "@/services/api";
 import logoEye from "@/assets/logo-eye.svg";
@@ -9,21 +10,18 @@ interface AiCouncilPanelProps {
   hasPrediction: boolean;
 }
 
-const ACTION_STYLES: Record<TradeAction, { badge: string; glow: string; label: string }> = {
+const ACTION_STYLES: Record<TradeAction, { badge: string; glow: string }> = {
   LONG: {
     badge: "bg-emerald-500/20 text-emerald-300 border-emerald-400/50",
     glow: "shadow-[0_0_15px_rgba(16,185,129,0.25)]",
-    label: "🟢 LONG",
   },
   SHORT: {
     badge: "bg-red-500/20 text-red-300 border-red-400/50",
     glow: "shadow-[0_0_15px_rgba(239,68,68,0.25)]",
-    label: "🔴 SHORT",
   },
   HOLD: {
     badge: "bg-zinc-500/20 text-zinc-300 border-zinc-400/50",
     glow: "shadow-[0_0_15px_rgba(161,161,170,0.15)]",
-    label: "⏸ HOLD",
   },
 };
 
@@ -67,6 +65,7 @@ function TerminalLine({ line, index }: { line: string; index: number }) {
 }
 
 export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiCouncilPanelProps) {
+  const { t, i18n } = useTranslation();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiLogs, setAiLogs] = useState<string[]>([]);
   const [finalDecision, setFinalDecision] = useState<AiCouncilDecision | null>(null);
@@ -115,7 +114,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
           Accept: "text/event-stream",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ symbol, timeframe, risk_profile: "BALANCED" }),
+        body: JSON.stringify({ symbol, timeframe, risk_profile: "BALANCED", language: i18n.language }),
         signal: controller.signal,
       });
 
@@ -226,7 +225,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
 
   return (
     <div className="mt-4 rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-4">
-      <p className="muted-label">AI AGENT TEAM</p>
+      <p className="muted-label">{t("aiCouncil.title")}</p>
 
       {/* ── Main Action Button ── */}
       <button
@@ -235,7 +234,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
         disabled={isAnalyzing || !hasPrediction}
         title={
           !hasPrediction
-            ? "Run ML Prediction first to provide data for the AI Agent Team."
+            ? t("aiCouncil.needPrediction")
             : undefined
         }
         className="mt-2 flex w-full items-center justify-center gap-3 rounded-xl border border-violet-300/60 bg-gradient-to-r from-violet-500/15 via-fuchsia-500/10 to-cyan-500/10 px-4 py-3.5 text-sm font-semibold text-violet-100 transition-all duration-300 hover:from-violet-500/25 hover:via-fuchsia-500/20 hover:to-cyan-500/20 hover:shadow-[0_0_20px_rgba(139,92,246,0.15)] disabled:cursor-not-allowed disabled:opacity-50"
@@ -243,7 +242,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
         {isAnalyzing ? (
           <>
             <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-violet-300 border-t-transparent flex-shrink-0" />
-            <span>Agents are analyzing strategy...</span>
+            <span>{t("aiCouncil.analyzing")}</span>
           </>
         ) : (
           <>
@@ -252,14 +251,14 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
               alt="Aether AI"
               className="w-10 h-10 flex-shrink-0 object-contain opacity-90 drop-shadow-[0_0_6px_rgba(139,92,246,0.5)]"
             />
-            <span>Analyze &amp; Generate Signals</span>
+            <span>{t("aiCouncil.analyzeButton")}</span>
           </>
         )}
       </button>
 
       {!hasPrediction && !isAnalyzing && (
         <p className="mt-1.5 text-center text-[10px] text-violet-200/50">
-          Run ML Prediction first to unlock this feature.
+          {t("aiCouncil.needPrediction")}
         </p>
       )}
 
@@ -302,9 +301,11 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
         <div className="mt-3 space-y-3">
           {/* Action + Confidence badge row */}
           <div className={`flex items-center gap-3 rounded-xl border p-3 ${style.badge} ${style.glow}`}>
-            <span className="text-xl font-black tracking-wider">{style.label}</span>
+            <span className="text-xl font-black tracking-wider">
+              {t(`aiCouncil.actionLabels.${finalDecision.action}`)}
+            </span>
             <div className="ml-auto flex flex-col items-end">
-              <span className="text-[10px] uppercase tracking-wider opacity-60">Confidence</span>
+              <span className="text-[10px] uppercase tracking-wider opacity-60">{t("aiCouncil.confidence")}</span>
               <span className="text-lg font-bold">{(finalDecision.confidence * 100).toFixed(0)}%</span>
             </div>
           </div>
@@ -315,7 +316,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
               {/* BLOCK 1: ENTRY & RISK MANAGEMENT */}
               <div className="grid grid-cols-3 gap-2 text-xs">
                 <div className="col-span-2 rounded-lg border border-cyan-400/20 bg-cyan-900/10 p-2.5">
-                  <p className="text-[10px] font-medium uppercase tracking-wider text-cyan-200/50">Entry Zone & Timing</p>
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-cyan-200/50">{t("aiCouncil.entryZone")}</p>
                   <p className="mt-1 text-base font-bold text-cyan-300">
                     ${finalDecision.entry.toLocaleString(undefined, { maximumFractionDigits: 4 })}
                   </p>
@@ -323,30 +324,30 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
                     ⚡ {finalDecision.entry_condition}
                   </p>
                 </div>
-                <div className="flex flex-col gap-2">
-                  <div className="rounded-lg border border-violet-400/20 bg-violet-900/20 p-2 flex-1 flex flex-col justify-center items-center">
-                    <p className="text-[9px] font-medium uppercase text-violet-200/50">Leverage</p>
-                    <p className="font-bold text-violet-300">{finalDecision.leverage}×</p>
-                  </div>
-                  <div className="rounded-lg border border-amber-400/20 bg-amber-900/20 p-2 flex-1 flex flex-col justify-center items-center">
-                    <p className="text-[9px] font-medium uppercase text-amber-200/50">Pos Size</p>
-                    <p className="font-bold text-amber-300">{finalDecision.position_size_pct}%</p>
+                  <div className="flex flex-col gap-2">
+                    <div className="rounded-lg border border-violet-400/20 bg-violet-900/20 p-2 flex-1 flex flex-col justify-center items-center">
+                      <p className="text-[9px] font-medium uppercase text-violet-200/50">{t("aiCouncil.leverage")}</p>
+                      <p className="font-bold text-violet-300">{finalDecision.leverage}×</p>
+                    </div>
+                    <div className="rounded-lg border border-amber-400/20 bg-amber-900/20 p-2 flex-1 flex flex-col justify-center items-center">
+                      <p className="text-[9px] font-medium uppercase text-amber-200/50">{t("aiCouncil.positionSize")}</p>
+                      <p className="font-bold text-amber-300">{finalDecision.position_size_pct}%</p>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* BLOCK 2: DUAL TAKE PROFIT */}
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="rounded-lg border border-emerald-400/15 bg-emerald-500/5 p-2.5 relative overflow-hidden">
-                  <div className="absolute top-0 right-0 bg-emerald-500/20 px-2 py-0.5 rounded-bl-lg text-[9px] text-emerald-300">TP 1 (Safe)</div>
-                  <p className="text-[10px] font-medium uppercase tracking-wider text-emerald-300/50">Take Profit 1</p>
+                {/* BLOCK 2: DUAL TAKE PROFIT */}
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-lg border border-emerald-400/15 bg-emerald-500/5 p-2.5 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 bg-emerald-500/20 px-2 py-0.5 rounded-bl-lg text-[9px] text-emerald-300">{t("aiCouncil.tpSafe")}</div>
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-emerald-300/50">{t("aiCouncil.takeProfit1")}</p>
                   <p className="mt-1 text-base font-bold text-emerald-400">
                     ${finalDecision.take_profit_1.toLocaleString(undefined, { maximumFractionDigits: 4 })}
                   </p>
                 </div>
-                <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-2.5 relative shadow-[0_0_10px_rgba(16,185,129,0.1)]">
-                  <div className="absolute top-0 right-0 bg-emerald-500/30 px-2 py-0.5 rounded-bl-lg text-[9px] text-emerald-200 font-bold">TP 2 (Moon)</div>
-                  <p className="text-[10px] font-medium uppercase tracking-wider text-emerald-300/50">Take Profit 2</p>
+                  <div className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-2.5 relative shadow-[0_0_10px_rgba(16,185,129,0.1)]">
+                    <div className="absolute top-0 right-0 bg-emerald-500/30 px-2 py-0.5 rounded-bl-lg text-[9px] text-emerald-200 font-bold">{t("aiCouncil.tpMoon")}</div>
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-emerald-300/50">{t("aiCouncil.takeProfit2")}</p>
                   <p className="mt-1 text-base font-bold text-emerald-300">
                     ${finalDecision.take_profit_2.toLocaleString(undefined, { maximumFractionDigits: 4 })}
                   </p>
@@ -357,20 +358,20 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
               <div className="rounded-lg border border-red-400/20 bg-red-900/10 p-2.5 text-xs">
                  <div className="flex justify-between items-end border-b border-red-400/10 pb-2 mb-2">
                     <div>
-                      <p className="text-[10px] font-medium uppercase tracking-wider text-red-300/50">Hard Stop Loss</p>
+                      <p className="text-[10px] font-medium uppercase tracking-wider text-red-300/50">{t("aiCouncil.stopLoss")}</p>
                       <p className="mt-0.5 text-lg font-bold text-red-400">
                         ${finalDecision.stop_loss.toLocaleString(undefined, { maximumFractionDigits: 4 })}
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className="text-[9px] uppercase text-violet-200/40">Risk/Reward (TP1)</p>
+                      <p className="text-[9px] uppercase text-violet-200/40">{t("aiCouncil.riskReward")}</p>
                       <p className="text-sm font-bold text-violet-300">
                         1 : {Math.abs((finalDecision.take_profit_1 - finalDecision.entry) / (finalDecision.entry - finalDecision.stop_loss || 1)).toFixed(2)}
                       </p>
                     </div>
                  </div>
                  <div>
-                    <p className="text-[9px] font-medium uppercase text-red-300/40">⚠️ Invalidation Point:</p>
+                    <p className="text-[9px] font-medium uppercase text-red-300/40">{t("aiCouncil.invalidationPoint")}</p>
                     <p className="mt-0.5 text-[11px] text-red-200/70">{finalDecision.invalidation_point}</p>
                  </div>
               </div>
@@ -380,7 +381,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
           {/* Council Reasoning */}
           <div className="rounded-xl border border-violet-400/20 bg-cosmic-900/50 p-3">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-violet-200/50 mb-2">
-              Council Reasoning
+              {t("aiCouncil.councilReasoning")}
             </p>
             <p className="text-xs leading-relaxed text-violet-100/90 break-words whitespace-pre-wrap">
               {finalDecision.reasoning}
@@ -398,7 +399,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
                 <span className="inline-block transition-transform duration-200" style={{ transform: showTranscript ? "rotate(180deg)" : "rotate(0deg)" }}>
                   ▼
                 </span>
-                {showTranscript ? "Hide agent transcript" : "View full agent transcript"}
+                {showTranscript ? t("aiCouncil.hideTranscript") : t("aiCouncil.viewTranscript")}
               </button>
 
               {showTranscript && (
