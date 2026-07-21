@@ -1,0 +1,386 @@
+AetherForecast — Enterprise Architecture Blueprint
+=====================================================
+Production-Grade Financial Forecasting Platform
+Version: 2.0  |  Classification: Architecture & Engineering Context
+Prepared for: Master's Thesis & Enterprise Design Review
+Last Updated: 2026-07-22
+
+
+1. EXECUTIVE SUMMARY & CORE VALUE PROPOSITION
+---------------------------------------------
+
+AetherForecast is an enterprise-grade, real-time financial forecasting and
+quantitative decision-support platform engineered for cryptocurrency spot
+markets (Binance universe) and precious metals (XAUUSD, PAXG). The platform
+combines a chronos-2 based time-series foundation model, a multi-agent
+deliberative reasoning system, and a resilient AWS-native serverless/hybrid
+infrastructure to deliver actionable trading intelligence with quantifiable
+risk management.
+
+Core value pillars:
+
+  a) Resilient Architecture
+     - Single-tenant, cost-optimized EC2 backend fronted by CloudFront,
+       designed for 99.9% availability through redundant data paths,
+       manifest-driven model hot-reloads, and automated self-healing
+       rollouts.
+
+  b) Quantifiable Risk Management
+     - Every prediction is accompanied by confidence intervals, risk-of-ruin
+       heuristics, leverage bounds per risk profile, and a multi-agent
+       governance layer that can veto or attenuate any trade signal.
+
+  c) Continuous Learning (MLOps)
+     - A managed AWS Batch GPU training pipeline continuously retrains and
+       evaluates Chronos-2 variants against fresh market data, promoting only
+       validated artifacts to the production model registry.
+
+  d) Zero-Trust Security Posture
+     - No SSH, no plaintext secrets, no direct public internet exposure of
+       compute. All access flows through Cognito JWT, AWS Systems Manager,
+       and Secrets Manager with audit-grade logging.
+
+Target users: retail traders, quantitative analysts, and system operators who
+require institutional-grade forecasting without institutional infrastructure
+cost.
+
+
+2. ADVANCED MULTI-AGENT SYSTEM: THE "AI COUNCIL"
+------------------------------------------------
+
+The AI Council has evolved from a simple sequential CrewAI pipeline into a
+Graph-based Iterative Debate Architecture inspired by LangGraph and formal
+deliberation theory. The design explicitly addresses the single-agent bias
+problem by forcing every hypothesis to survive adversarial scrutiny before a
+LONG/SHORT signal is emitted.
+
+2.1 Agent Roles
+
+  ┌──────────────────┬─────────────────────────────────────────────────────┐
+  │ Agent            │ Responsibility                                      │
+  ├──────────────────┼─────────────────────────────────────────────────────┤
+  │ Quant Analyst    │ Reads technical indicators, Chronos-2 forecast      │
+  │                  │ bands, and realized volatility. Emits a directional │
+  │                  │ bias (LONG/SHORT/NEUTRAL), entry/stop/take-profit   │
+  │                  │ levels, and an initial confidence score.            │
+  ├──────────────────┼─────────────────────────────────────────────────────┤
+  │ Risk Manager     │ Evaluates sentiment, funding rate, fear/greed,      │
+  │                  │ and macro context. Can approve, reduce, or veto     │
+  │                  │ the Quant's proposal and enforces leverage bounds   │
+  │                  │ tied to the user's risk profile (CONSERVATIVE,      │
+  │                  │ BALANCED, DEGEN).                                   │
+  ├──────────────────┼─────────────────────────────────────────────────────┤
+  │ Devil's Advocate │ Adversarial agent whose sole objective is to        │
+  │                  │ challenge the Quant Analyst's bias. It searches for │
+  │                  │ contradictory technical evidence, low-probability   │
+  │                  │ tail risks, and overfitting to recent candles.      │
+  │                  │ A signal cannot proceed unless the Advocate's       │
+  │                  │ objections are explicitly addressed.                │
+  ├──────────────────┼─────────────────────────────────────────────────────┤
+  │ Execution Judge  │ Final arbiter. Synthesizes the Quant proposal,      │
+  │                  │ Risk Manager verdict, and Devil's Advocate critique │
+  │                  │ into a single AiCouncilDecision JSON. Uses a        │
+  │                  │ reasoning-intensive LLM (deepseek-reasoner).        │
+  └──────────────────┴─────────────────────────────────────────────────────┘
+
+2.2 Graph Topology
+
+The debate is modeled as a directed state graph:
+
+    MarketContext
+         │
+         ▼
+    ┌─────────┐
+    │  Quant  │ ──► [proposal]
+    └────┬────┘
+         │
+         ▼
+    ┌───────────┐
+    │ Devil's   │ ──► [critique]
+    │ Advocate  │
+    └─────┬─────┘
+         │
+         ▼
+    ┌───────────┐     ┌─────────────┐
+    │   Risk    │◄────│  Revision   │ (Quant revises in light of critique)
+    │  Manager  │     │   Loop      │
+    └─────┬─────┘     └─────────────┘
+          │
+          ▼
+    ┌───────────┐
+    │  Judge    │ ──► AiCouncilDecision {action, entry, SL, TP, leverage,
+    └───────────┘     position_size_pct, invalidation_point, reasoning}
+
+Key graph semantics:
+- Revision Loop: If the Devil's Advocate raises material objections, the
+  Quant Analyst must revise the proposal before the Risk Manager reviews it.
+- Conditional Edges: A HOLD verdict from the Risk Manager short-circuits
+  to the Judge with zero risk parameters.
+- Output Guardrails: The Judge emits a Pydantic-validated JSON object; any
+  parse failure returns a safe HOLD decision with diagnostic reasoning.
+
+2.3 Localization of Reasoning Output
+
+To optimize token spend while serving a bilingual user base, agents think and
+deliberate entirely in English. Only the final `reasoning` field is translated
+into the user's preferred language (`en` or `vi`) via an explicit prompt
+instruction to the Execution Judge. This preserves reasoning quality and
+reduces translation costs.
+
+
+3. AUTOMATED MLOPS & ZERO-DOWNTIME PIPELINE
+--------------------------------------------
+
+3.1 Continuous Training (CT) Pipeline
+
+  EventBridge (scheduled or triggered by data drift alarm)
+         │
+         ▼
+  ┌─────────────────┐
+  │  AWS Batch GPU  │  (g4dn/g5 family; SPOT with On-Demand fallback)
+  │  Training Job   │
+  └────────┬────────┘
+           │
+           ▼
+  ┌─────────────────────┐
+  │  Fine-tune Chronos-2│  LoRA adapters, checkpoint recovery to S3
+  │  + LoRA adapters    │
+  └────────┬────────────┘
+           │
+           ▼
+  ┌─────────────────────┐
+  │  Offline Evaluation │  Directional accuracy, calibration error,
+  │  (Backtest harness) │  max drawdown, risk-adjusted returns
+  └────────┬────────────┘
+           │
+           ▼
+  ┌─────────────────────┐
+  │  Model Registry     │  S3 `versions/<timestamp>/` + signed manifest
+  │  + Promotion Gate   │  metadata; promotion only if metrics exceed
+  └─────────────────────┘  configured thresholds
+           │
+           ▼
+  ┌─────────────────────┐
+  │  manifest/latest.json│  Atomic pointer update
+  └─────────────────────┘
+
+Training inputs:
+- Partitioned Parquet data lake in S3 (`market/klines/symbol=.../year=.../month=.../`).
+- Covariates: multi-timeframe returns, volatility regimes, TA-Lib patterns,
+  and external sentiment snapshots.
+- Hyperparameters are version-controlled; overrides supported via Batch job
+  definition environment variables.
+
+3.2 Zero-Downtime Model Hot-Reload
+
+The FastAPI inference service never holds a stale model reference directly.
+Instead, it maintains a Model Loader thread with the following lifecycle:
+
+  1. Background poller watches `s3://<model-bucket>/manifest/latest.json`
+     every N seconds.
+  2. On manifest change, a new `ForecastInferenceService` instance is
+     constructed asynchronously in a background thread, loading the new
+     Chronos-2 weights and LoRA adapters into a separate memory space.
+  3. A cryptographic hash (SHA-256) of the manifest and artifact bundle is
+     computed and compared against a trusted allow-list before the new model
+     is accepted.
+  4. Once validation passes, the service atomically swaps the active model
+     pointer using a thread-safe reference (e.g., a `threading.Lock` guarded
+     singleton or atomic variable swap).
+  5. In-flight `/predict` requests complete against the old model; new
+     requests immediately use the updated weights. No HTTP connections are
+     dropped and no container restart is required.
+
+This mechanism is the foundation of "model promotion without deployment,"
+allowing the ML team to ship new model versions independently of the
+application release cadence.
+
+
+4. COMPREHENSIVE DEVSECOPS & ZERO-TRUST ARCHITECTURE
+-----------------------------------------------------
+
+All recent security findings have been treated as architectural requirements
+and implemented as first-class controls.
+
+4.1 Perimeter Defense
+
+  - AWS WAF v2 is attached to CloudFront with managed rule sets:
+    * AWSManagedRulesCommonRuleSet
+    * AWSManagedRulesKnownBadInputsRuleSet
+    * Rate-based rule per IP (mitigates Layer 7 floods)
+  - CloudFront Origin Access Identity (OAI) / Origin Access Control (OAC)
+    ensures the S3 frontend bucket is never directly addressable.
+  - EC2 Security Groups are locked down to CloudFront Managed Prefix Lists
+    only, eliminating direct public internet exposure of the backend API.
+  - Caddy enforces strict origin verification and the shared-secret
+    `X-Aether-Origin-Secret` header for CloudFront-to-origin traffic.
+
+4.2 Compute Security
+
+  - No SSH ports open. Port 22 is not exposed on any production instance.
+  - All interactive management flows through AWS Systems Manager Session
+    Manager, which provides:
+    * IAM-controlled access
+    * Full session audit logging to CloudWatch Logs / S3
+    * No long-lived bastion hosts
+  - Containers run as non-root where feasible; host-level security updates
+    are applied via automated patching runbooks.
+
+4.3 Identity & Session Management
+
+  - Amazon Cognito User Pool issues short-lived JWT access tokens.
+  - Tokens are stored in HttpOnly, Secure, SameSite=Strict cookies instead of
+    `localStorage`, eliminating XSS exfiltration vectors.
+  - Backend validates:
+    * Token signature (RS256)
+    * `exp` / `iss` / `aud` claims with strict audience matching
+    * Cognito `client_id`
+  - SlowAPI enforces per-endpoint rate limits (e.g., 5 AI Council requests
+    per hour per IP) to prevent credential-stuffing and abuse.
+
+4.4 Data & Model Integrity (Anti-Poisoning)
+
+  - S3 Object Lock in Compliance mode provides Write-Once-Read-Many (WORM)
+    protection for:
+    * Model manifests (`manifest/latest.json` and historical pointers)
+    * Audit logs and agent decision transcripts
+    * Training artifact provenance records
+  - Model artifacts are validated with SHA-256 hashes before loading. The
+    inference service refuses to execute `trust_remote_code` from any model
+    whose hash does not match the signed manifest.
+  - Parquet partitions are versioned and immutable; incremental ingestion
+    writes new files rather than mutating existing ones, enabling time-travel
+    queries and forensic reconstruction.
+
+4.5 Resource Exhaustion Defense
+
+  - Strict regex whitelisting on all user-supplied inputs (symbol, timeframe,
+    search query) prevents S3 glob-pattern injection and path-traversal DoS.
+  - Multi-tier rate limiting:
+    * WAF: IP-level and URI-level rate limits
+    * SlowAPI: endpoint-specific quotas (e.g., `/predict`, `/api/ai/analyze`)
+    * Application: per-user concurrency caps on expensive inference paths
+  - Input size caps and timeout guards on model inference prevent
+    unbounded memory/CPU consumption.
+
+4.6 Secrets Management
+
+  - Migration completed from plaintext `.env` files to AWS Secrets Manager.
+  - Secrets are fetched at container startup and refreshed on a schedule;
+    they are never written to disk in plain text.
+  - Automated rotation is configured for:
+    * Database/API credentials
+    * CloudFront origin-verify secret
+    * Cognito client secrets
+  - GitHub Actions uses OIDC federation to AWS; no long-lived AWS access keys
+    are stored in GitHub Secrets.
+
+
+5. OBSERVABILITY, AUDIT, AND INCIDENT RESPONSE
+-----------------------------------------------
+
+5.1 Structured Audit Logging
+
+All components emit structured JSON logs via `structlog` with the following
+processors:
+
+  - Timestamp normalization (UTC ISO-8601)
+  - Correlation ID injection (per request / per WebSocket session)
+  - PII redaction (email, IP partial masking, token truncation)
+  - Secret redaction (any value matching common secret patterns)
+  - Severity classification (`debug`, `info`, `warning`, `error`, `critical`)
+
+Key log streams:
+  - `/var/log/aetherforecast/backend.log` → CloudWatch Logs
+  - `/var/log/aetherforecast/cron.log` → CloudWatch Logs
+  - AWS Batch training logs → CloudWatch Logs (retention: 30 days)
+  - S3 access logs → dedicated audit bucket with Object Lock
+
+5.2 Metrics & Anomaly Detection
+
+Custom CloudWatch metrics emitted by the backend:
+
+  | Namespace            | Metric                    | Purpose                                  |
+  |----------------------|---------------------------|------------------------------------------|
+  | AetherForecast/API   | ApiRequests               | Request throughput per route             |
+  | AetherForecast/API   | Api5xx                    | Error rate for availability alerting     |
+  | AetherForecast/API   | ApiLatencyMs              | p50/p99 latency tracking                 |
+  | AetherForecast/API   | WebSocketConnections      | Active realtime connections              |
+  | AetherForecast/Pipeline | FetchRuns              | Cron ingestion health                    |
+  | AetherForecast/Pipeline | FetchErrors            | Data ingestion failure rate              |
+  | AetherForecast/Pipeline | ParquetRowsWritten       | Data volume trend                        |
+  | AetherForecast/Pipeline | ModelPromotionSuccess    | Successful zero-downtime model swaps     |
+  | AetherForecast/Host  | ContainerHealthy          | Docker container liveness                |
+  | AetherForecast/Host  | CronHealthy               | Host cron heartbeat                      |
+  | AetherForecast/Host  | CronLastSuccessAgeSeconds | Stale pipeline detection                 |
+
+Anomaly Detection:
+  - CloudWatch Alarms trigger on statistical deviations (e.g., latency p99
+    > 2s for 5 minutes, 5xx errors > 5 in 5 minutes).
+  - AWS CloudWatch Anomaly Detection bands are applied to ApiRequests and
+    WebSocketConnections to detect silent failures or traffic spikes.
+
+5.3 Incident Response Triggers
+
+  | Condition                              | Automated Response                          |
+  |----------------------------------------|---------------------------------------------|
+  | Backend 5xx rate exceeds threshold     | SNS → Ops team; auto-capture logs snapshot  |
+  | ContainerHealthy == 0 for 10 minutes   | SNS → Ops team; SSM document for recovery   |
+  | Cron missing runs for 30 minutes       | SNS → Ops team; manual cron trigger SSM     |
+  | Model hash mismatch on load            | Reject new model; alert; retain old weights |
+  | WAF blocked request spike              | Auto-enable aggressive rate-limiting mode   |
+  | Training job failure                   | SNS → Data team; preserve checkpoint logs   |
+
+The operations dashboard (`AetherForecast-Operations`) consolidates all of
+the above into a single CloudWatch Dashboard for SRE visibility.
+
+
+6. SYSTEM BOUNDARIES & NON-GOALS
+---------------------------------
+
+In scope:
+  - Real-time and historical market data ingestion
+  - Parquet data lake and model registry on S3
+  - Chronos-2 inference and LoRA-based continuous training
+  - Multi-agent AI Council deliberation and decision output
+  - React dashboard with charting, prediction overlay, and i18n (en/vi)
+  - CI/CD, IaC, security scanning, and operational telemetry
+
+Explicitly out of scope:
+  - Live trade execution or order placement
+  - Wallet management, custody, or exchange integration
+  - Order matching engine
+  - Regulatory compliance certification (SOC 2, etc.) — though the
+    architecture is designed to facilitate future audits
+
+
+7. TECHNOLOGY STACK SUMMARY
+---------------------------
+
+  | Layer            | Technology                                       |
+  |------------------|--------------------------------------------------|
+  | Frontend         | React 18, Vite, TypeScript, TailwindCSS, Zustand, lightweight-charts, i18next |
+  | Backend          | FastAPI, Python 3.11+, Caddy reverse proxy       |
+  | ML/AI            | Chronos-2, LoRA, CrewAI/LangGraph, DeepSeek LLMs |
+  | Data Lake        | S3 + Apache Parquet (partitioned)                |
+  | Model Registry   | S3 + manifest/latest.json + SHA-256 verification |
+  | Training         | AWS Batch GPU (g4dn/g5), SPOT/On-Demand          |
+  | Infrastructure   | AWS CDK (TypeScript), CloudFront, S3, EC2, Cognito, WAF, Systems Manager, Secrets Manager |
+  | Observability    | CloudWatch Logs, CloudWatch Metrics/Alarms, SNS, structlog |
+  | Security         | Trivy, Bandit, git-secrets, WAF, SSM Session Manager, Secrets Manager |
+  | CI/CD            | GitHub Actions + OIDC, ECR, SSM rollout          |
+
+
+8. CONCLUSION
+-------------
+
+AetherForecast is architected as a production-grade, cost-conscious, and
+secure quantitative forecasting platform. The combination of a stateful
+multi-agent debate graph, continuous training with zero-downtime model
+promotion, and a zero-trust AWS foundation provides a defensible thesis for
+both academic evaluation and real-world deployment. Every design decision
+balances performance, cost, security, and operational simplicity, with
+explicit controls for the threats identified during recent security reviews.
+
+---
+End of AetherForecast Enterprise Architecture Blueprint
