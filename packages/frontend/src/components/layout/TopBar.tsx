@@ -36,13 +36,9 @@ export default function TopBar({
   onOpenAuthModal,
   onSignOut,
 }: TopBarProps) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const isPositive = (changePct ?? 0) >= 0;
-
-  const toggleLanguage = () => {
-    const nextLang = i18n.language === "vi" ? "en" : "vi";
-    void i18n.changeLanguage(nextLang);
-  };
+  const activeLanguage = i18n.language?.startsWith("vi") ? "vi" : "en";
 
   return (
     <header className="glass-panel rounded-2xl px-4 py-3">
@@ -52,24 +48,24 @@ export default function TopBar({
           <div>
             <p className="text-sm font-semibold tracking-wide text-neon-cyan">AetherForecast</p>
             <p className="text-[11px] uppercase tracking-[0.12em] text-violet-200/70">
-              Cosmic Trading Dashboard
+              {t("topBar.tagline")}
             </p>
           </div>
         </div>
 
         <label className="min-w-56 flex-1">
-          <span className="muted-label">Search Symbol</span>
+          <span className="muted-label">{t("topBar.searchSymbol")}</span>
           <input
             className="mt-1 w-full rounded-lg border border-violet-400/35 bg-cosmic-900/70 px-3 py-2 text-sm outline-none ring-neon-cyan/50 transition focus:ring"
             value={symbolSearch}
             onChange={(event) => onSymbolSearchChange(event.target.value.toUpperCase())}
-            placeholder="BTCUSDT"
+            placeholder={t("topBar.searchPlaceholder")}
           />
         </label>
 
         <div className="flex min-w-56 items-center gap-2 rounded-lg border border-violet-400/30 bg-cosmic-900/70 px-3 py-2">
           <div>
-            <p className="muted-label">Ticker</p>
+            <p className="muted-label">{t("topBar.ticker")}</p>
             <p className="font-medium text-violet-100">{symbol}</p>
           </div>
           <div className="ml-auto text-right">
@@ -101,14 +97,27 @@ export default function TopBar({
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          <button
-            type="button"
-            onClick={toggleLanguage}
-            className="rounded-lg border border-violet-400/35 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-100 transition hover:bg-violet-500/20"
-            aria-label="Toggle language"
+          <div
+            role="group"
+            aria-label={t("topBar.toggleLanguage")}
+            className="flex items-center gap-0.5 rounded-lg border border-violet-400/35 bg-cosmic-900/70 p-0.5"
           >
-            {i18n.language === "vi" ? "VI / EN" : "EN / VI"}
-          </button>
+            {(["en", "vi"] as const).map((lng) => (
+              <button
+                key={lng}
+                type="button"
+                onClick={() => void i18n.changeLanguage(lng)}
+                aria-pressed={activeLanguage === lng}
+                className={`rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition ${
+                  activeLanguage === lng
+                    ? "bg-cyan-400/20 text-cyan-100"
+                    : "text-violet-300/70 hover:text-violet-100"
+                }`}
+              >
+                {t(`language.${lng}`)}
+              </button>
+            ))}
+          </div>
           <span
             className={`rounded-full border px-3 py-1 text-xs ${
               apiStatus === "online"
@@ -118,7 +127,7 @@ export default function TopBar({
                   : "border-violet-300/40 text-violet-200"
             }`}
           >
-            API {apiStatus}
+            {t("topBar.apiStatus")} {apiStatus}
           </span>
           <span
             className={`rounded-full border px-3 py-1 text-xs ${
@@ -131,14 +140,14 @@ export default function TopBar({
                     : "border-violet-300/40 text-violet-200"
             }`}
           >
-            WS {wsStatus}
+            {t("topBar.wsStatus")} {wsStatus}
           </span>
           <button
             type="button"
             onClick={onOpenAuthModal}
             className="rounded-lg border border-violet-400/35 bg-violet-500/10 px-3 py-2 text-xs text-violet-100 transition hover:bg-violet-500/20"
           >
-            {isAuthenticated ? "Account" : "Login / Register"}
+            {isAuthenticated ? t("topBar.account") : t("topBar.loginRegister")}
           </button>
           {isAuthenticated && (
             <button
@@ -146,7 +155,7 @@ export default function TopBar({
               onClick={onSignOut}
               className="rounded-lg border border-violet-400/35 px-3 py-2 text-xs text-violet-200 transition hover:border-violet-300/60"
             >
-              Sign out
+              {t("topBar.signOut")}
             </button>
           )}
         </div>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   BusinessDay,
   CandlestickData,
@@ -16,6 +17,7 @@ import {
   createChart,
 } from "lightweight-charts";
 
+import i18n from "@/i18n";
 import { Candle, PredictResponse } from "@/services/api";
 import { PredictionStageDefinition, PredictionStageProgress } from "@/types/predictionProgress";
 
@@ -66,6 +68,10 @@ interface InspectSnapshot {
   rangePct: number;
   volume: number | null;
   isForecast: boolean;
+}
+
+function resolveIntlLocale(): string {
+  return i18n.language?.startsWith("vi") ? "vi-VN" : "en-US";
 }
 
 function parseTimestampMs(timestamp: string): number {
@@ -121,26 +127,27 @@ function formatAxisTimeLabel(time: Time, timeZone: string, tickMarkType: TickMar
     return "";
   }
 
+  const locale = resolveIntlLocale();
   switch (tickMarkType) {
     case TickMarkType.Year:
-      return new Intl.DateTimeFormat("vi-VN", {
+      return new Intl.DateTimeFormat(locale, {
         timeZone,
         year: "numeric",
       }).format(date);
     case TickMarkType.Month:
-      return new Intl.DateTimeFormat("vi-VN", {
+      return new Intl.DateTimeFormat(locale, {
         timeZone,
         month: "2-digit",
         year: "2-digit",
       }).format(date);
     case TickMarkType.DayOfMonth:
-      return new Intl.DateTimeFormat("vi-VN", {
+      return new Intl.DateTimeFormat(locale, {
         timeZone,
         day: "2-digit",
         month: "2-digit",
       }).format(date);
     case TickMarkType.TimeWithSeconds:
-      return new Intl.DateTimeFormat("vi-VN", {
+      return new Intl.DateTimeFormat(locale, {
         timeZone,
         hour: "2-digit",
         minute: "2-digit",
@@ -148,7 +155,7 @@ function formatAxisTimeLabel(time: Time, timeZone: string, tickMarkType: TickMar
         hour12: false,
       }).format(date);
     default:
-      return new Intl.DateTimeFormat("vi-VN", {
+      return new Intl.DateTimeFormat(locale, {
         timeZone,
         hour: "2-digit",
         minute: "2-digit",
@@ -163,7 +170,7 @@ function formatCrosshairTimeLabel(time: Time, timeZone: string): string {
     return "";
   }
 
-  return new Intl.DateTimeFormat("vi-VN", {
+  return new Intl.DateTimeFormat(resolveIntlLocale(), {
     timeZone,
     day: "2-digit",
     month: "2-digit",
@@ -254,7 +261,7 @@ function timeframeSeconds(timeframe: string): number {
 }
 
 function formatMetricValue(value: number, minimumFractionDigits = 2, maximumFractionDigits = 6): string {
-  return value.toLocaleString("vi-VN", {
+  return value.toLocaleString(resolveIntlLocale(), {
     minimumFractionDigits,
     maximumFractionDigits,
   });
@@ -483,6 +490,7 @@ export default function TradingChart({
   predictionProgress = [],
   activePredictionStage = null,
 }: TradingChartProps) {
+  const { t, i18n: i18nInstance } = useTranslation();
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const mainChartRef = useRef<HTMLDivElement | null>(null);
   const rsiChartRef = useRef<HTMLDivElement | null>(null);
@@ -606,7 +614,7 @@ export default function TradingChart({
 
     const options = {
       localization: {
-        locale: "vi-VN",
+        locale: resolveIntlLocale(),
         timeFormatter: (value: Time) => formatCrosshairTimeLabel(value, timeZoneRef.current),
       },
       timeScale: {
@@ -618,7 +626,7 @@ export default function TradingChart({
     mainChartApiRef.current?.applyOptions(options);
     rsiChartApiRef.current?.applyOptions(options);
     macdChartApiRef.current?.applyOptions(options);
-  }, [resolvedTimeZone]);
+  }, [resolvedTimeZone, i18nInstance.language]);
 
   useEffect(() => {
     if (!wrapperRef.current || !mainChartRef.current || !rsiChartRef.current || !macdChartRef.current) {
@@ -634,7 +642,7 @@ export default function TradingChart({
         background: { type: ColorType.Solid, color: "rgba(11,6,22,0.55)" },
       },
       localization: {
-        locale: "vi-VN",
+        locale: resolveIntlLocale(),
         timeFormatter: (value: Time) => formatCrosshairTimeLabel(value, timeZoneRef.current),
       },
       grid: {
@@ -1263,12 +1271,12 @@ export default function TradingChart({
               <div className="flex items-start gap-3">
                 <span className="mt-0.5 inline-block h-4 w-4 animate-spin rounded-full border-2 border-cyan-200/35 border-t-cyan-100" />
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-cyan-50">Generating prediction...</p>
+                  <p className="text-sm font-semibold text-cyan-50">{t("tradingChart.generatingPrediction")}</p>
                   <p className="text-xs font-medium text-cyan-100/90">
-                    {activePredictionStage?.title ?? "Đang khởi tạo pipeline dự đoán"}
+                    {activePredictionStage?.title ?? t("predictionPipeline.initializingTitle")}
                   </p>
                   <p className="mt-1 text-[11px] text-cyan-100/75">
-                    {activePredictionStage?.description ?? "Đang chuẩn bị dữ liệu và kết nối model."}
+                    {activePredictionStage?.description ?? t("predictionPipeline.initializingDescription")}
                   </p>
                 </div>
               </div>
@@ -1306,7 +1314,7 @@ export default function TradingChart({
             <div className="flex items-center gap-3 rounded-full border border-cyan-300/40 bg-cosmic-900/85 px-4 py-2 text-xs font-medium text-cyan-100">
               <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-cyan-300" />
               <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-cyan-200/30 border-t-cyan-200" />
-              <span>Syncing chart data...</span>
+              <span>{t("tradingChart.syncingChartData")}</span>
             </div>
           )}
         </div>
@@ -1315,14 +1323,12 @@ export default function TradingChart({
         <div className="pointer-events-none absolute right-3 top-3 z-20 flex items-center gap-2 rounded-full border border-cyan-300/40 bg-cosmic-900/90 px-3 py-1.5 text-[11px] font-medium text-cyan-100">
           <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-cyan-300" />
           <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-cyan-200/30 border-t-cyan-100" />
-          <span>Syncing latest market data...</span>
+          <span>{t("tradingChart.syncingLatestMarketData")}</span>
         </div>
       )}
       {(showNoDataMessage || showInvalidDataMessage) && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl border border-violet-400/25 bg-cosmic-900/70 px-6 text-center text-sm text-violet-200/80">
-          {showNoDataMessage
-            ? "Chart data is empty. Select a symbol and ensure API access token is valid."
-            : "Chart data was received but contains invalid timestamp or OHLCV values. Refresh history and verify backend candle formatting."}
+          {showNoDataMessage ? t("tradingChart.emptyChartData") : t("tradingChart.invalidChartData")}
         </div>
       )}
       <div ref={mainChartRef} className="h-[440px] rounded-xl border border-violet-400/25" />
@@ -1332,59 +1338,60 @@ export default function TradingChart({
           style={{ left: inspectTooltipLeft, top: inspectTooltipTop }}
         >
           <div className="mb-1 text-[11px] font-semibold text-cyan-50">
-            {inspectSnapshot.isForecast ? "Dự đoán" : "Thị trường"} · {inspectSnapshot.timeLabel}
+            {inspectSnapshot.isForecast ? t("tradingChart.tooltip.forecast") : t("tradingChart.tooltip.market")} ·{" "}
+            {inspectSnapshot.timeLabel}
           </div>
           <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 text-[10px] leading-5">
-            <span className="text-cyan-200/85">Giá mở</span>
+            <span className="text-cyan-200/85">{t("tradingChart.tooltip.open")}</span>
             <span>{formatMetricValue(inspectSnapshot.open)}</span>
-            <span className="text-cyan-200/85">Giá cao</span>
+            <span className="text-cyan-200/85">{t("tradingChart.tooltip.high")}</span>
             <span>{formatMetricValue(inspectSnapshot.high)}</span>
-            <span className="text-cyan-200/85">Giá thấp</span>
+            <span className="text-cyan-200/85">{t("tradingChart.tooltip.low")}</span>
             <span>{formatMetricValue(inspectSnapshot.low)}</span>
-            <span className="text-cyan-200/85">Giá đóng</span>
+            <span className="text-cyan-200/85">{t("tradingChart.tooltip.close")}</span>
             <span>{formatMetricValue(inspectSnapshot.close)}</span>
-            <span className="text-cyan-200/85">Thay đổi</span>
+            <span className="text-cyan-200/85">{t("tradingChart.tooltip.change")}</span>
             <span className={inspectSnapshot.change >= 0 ? "text-cyan-200" : "text-rose-300"}>
               {formatSignedMetric(inspectSnapshot.change)}
             </span>
-            <span className="text-cyan-200/85">% Thay đổi</span>
+            <span className="text-cyan-200/85">{t("tradingChart.tooltip.changePct")}</span>
             <span className={inspectSnapshot.changePct >= 0 ? "text-cyan-200" : "text-rose-300"}>
               {formatSignedMetric(inspectSnapshot.changePct, 2, 2)}%
             </span>
-            <span className="text-cyan-200/85">Biên độ</span>
+            <span className="text-cyan-200/85">{t("tradingChart.tooltip.range")}</span>
             <span>{formatMetricValue(inspectSnapshot.rangePct, 2, 2)}%</span>
-            <span className="text-cyan-200/85">Khối lượng</span>
+            <span className="text-cyan-200/85">{t("tradingChart.tooltip.volume")}</span>
             <span>
               {inspectSnapshot.volume !== null ? formatMetricValue(inspectSnapshot.volume, 2, 2) : "--"}
             </span>
           </div>
-          <div className="mt-1 text-[10px] text-cyan-200/70">Nhấn Esc để đóng bảng thông tin.</div>
+          <div className="mt-1 text-[10px] text-cyan-200/70">{t("tradingChart.tooltip.closeHint")}</div>
         </div>
       )}
       <div className="flex flex-wrap items-center gap-4 px-1 text-[11px] text-violet-200/75">
         <span className="flex items-center gap-2">
           <span className="inline-block h-[2px] w-5 bg-cyan-300" />
-          <span>Live candle price (realtime)</span>
+          <span>{t("tradingChart.legend.livePrice")}</span>
         </span>
         <span className="flex items-center gap-2">
           <span className="inline-block h-[2px] w-5 bg-violet-400" />
-          <span>Prediction (avg close)</span>
+          <span>{t("tradingChart.legend.prediction")}</span>
         </span>
         <span className="flex items-center gap-2">
           <span className="inline-block h-3 w-3 rounded-sm border border-violet-300/80 bg-violet-500/20" />
-          <span>Forecast range (high/low)</span>
+          <span>{t("tradingChart.legend.forecastRange")}</span>
         </span>
-        <span className="text-cyan-200/75">Click chart to pin OHLC tooltip, Esc to close</span>
+        <span className="text-cyan-200/75">{t("tradingChart.legend.clickHint")}</span>
       </div>
       {isLoadingOlder && (
         <div className="flex items-center gap-2 px-1 text-[11px] text-cyan-200/70">
           <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-cyan-300/90" />
-          <span>Loading older candles...</span>
+          <span>{t("tradingChart.loadingOlderCandles")}</span>
         </div>
       )}
-      <div className="muted-label px-1">RSI (14)</div>
+      <div className="muted-label px-1">{t("tradingChart.rsi")}</div>
       <div ref={rsiChartRef} className="h-[145px] rounded-xl border border-violet-400/25" />
-      <div className="muted-label px-1">MACD (12,26,9)</div>
+      <div className="muted-label px-1">{t("tradingChart.macd")}</div>
       <div ref={macdChartRef} className="h-[145px] rounded-xl border border-violet-400/25" />
     </div>
   );

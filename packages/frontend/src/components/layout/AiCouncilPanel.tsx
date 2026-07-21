@@ -93,12 +93,12 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
     setIsAnalyzing(true);
     setError(null);
     setFinalDecision(null);
-    setAiLogs(["Establishing secure connection to Aether AI Council..."]);
+    setAiLogs([t("aiCouncil.connecting")]);
     setShowTranscript(false);
 
     const token = getAuthToken();
     if (!token) {
-      setError("Authentication required. Please sign in.");
+      setError(t("aiCouncil.authRequired"));
       setIsAnalyzing(false);
       return;
     }
@@ -119,7 +119,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
       });
 
       if (response.status === 429) {
-        setError("⏳ Rate limit reached. Please try again later (max 5 requests/hour).");
+        setError(t("aiCouncil.rateLimited"));
         setIsAnalyzing(false);
         return;
       }
@@ -140,7 +140,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
       }
 
       if (!response.body) {
-        throw new Error("Streaming not supported by this browser.");
+        throw new Error(t("aiCouncil.streamingUnsupported"));
       }
 
       const reader = response.body.getReader();
@@ -177,12 +177,15 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
                 ...prev,
                 "",
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                "✅ AI Agent Team has reached consensus.",
-                `   Action: ${parsed.action} | Confidence: ${(parsed.confidence * 100).toFixed(0)}%`,
+                t("aiCouncil.consensusReached"),
+                t("aiCouncil.consensusLine", {
+                  action: parsed.action,
+                  confidence: (parsed.confidence * 100).toFixed(0),
+                }),
               ]);
             } catch (parseErr) {
               console.error("Parse Error Final JSON:", parseErr, message);
-              setAiLogs((prev) => [...prev, `⚠️ Failed to parse result — raw output saved to console.`]);
+              setAiLogs((prev) => [...prev, t("aiCouncil.parseFailed")]);
             }
             continue;
           }
@@ -213,13 +216,13 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
       const message =
         err instanceof Error
           ? err.message
-          : "AI Agent Team is unavailable. Check DEEPSEEK_API_KEY configuration.";
+          : t("aiCouncil.unavailable");
       console.error("[AI Council] analyze failed", { symbol, timeframe, error: err });
       setError(message);
     } finally {
       setIsAnalyzing(false);
     }
-  }, [symbol, timeframe, isAnalyzing]);
+  }, [symbol, timeframe, isAnalyzing, t]);
 
   const style = finalDecision ? ACTION_STYLES[finalDecision.action] : null;
 
@@ -265,7 +268,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
       {/* ── Error ── */}
       {error && (
         <div className="mt-3 rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-xs text-red-200">
-          <span className="font-semibold">Error: </span>
+          <span className="font-semibold">{t("aiCouncil.errorLabel")} </span>
           {error}
         </div>
       )}

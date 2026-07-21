@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 
 import TradingChart from "@/components/chart/TradingChart";
 import PredictionPanel from "@/components/layout/PredictionPanel";
@@ -9,6 +10,7 @@ import TopBar from "@/components/layout/TopBar";
 import AuthTokenModal from "@/components/ui/AuthTokenModal";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useMarketStore } from "@/hooks/useMarketStore";
+import i18n from "@/i18n";
 import {
   fetchBinance24hTicker,
   fetchBinanceMarkPrice,
@@ -23,10 +25,10 @@ import {
   Timeframe,
 } from "@/services/api";
 import {
-  PREDICTION_PIPELINE_STEPS,
   PredictionStageDefinition,
   PredictionStageKey,
   PredictionStageProgress,
+  usePredictionPipelineSteps,
 } from "@/types/predictionProgress";
 
 const HISTORICAL_LIMIT_BY_TIMEFRAME: Record<Timeframe, number> = {
@@ -275,18 +277,18 @@ function upsertRealtimeCandle(
 function resolveApiErrorMessage(error: unknown, fallback: string): string {
   if (axios.isAxiosError(error)) {
     if (error.code === "ERR_NETWORK" || error.code === "ERR_CONNECTION_RESET") {
-      return "Network connection was interrupted while loading chart data. Retrying...";
+      return i18n.t("dashboard.errors.networkInterrupted");
     }
 
     const status = error.response?.status;
     if (status === 401 || status === 403) {
-      return "Authentication token is invalid or expired. Please sign in again.";
+      return i18n.t("dashboard.errors.authInvalid");
     }
     if (status === 404) {
-      return "Requested API route was not found. Please verify backend deployment.";
+      return i18n.t("dashboard.errors.routeNotFound");
     }
     if (status && status >= 500) {
-      return "Backend is temporarily unavailable. Please retry in a moment.";
+      return i18n.t("dashboard.errors.backendUnavailable");
     }
   }
   return fallback;
@@ -351,7 +353,7 @@ function resolvePredictionErrorMessage(error: unknown): string {
     if (error instanceof Error && error.message) {
       return error.message;
     }
-    return "Prediction request failed. Please retry.";
+    return i18n.t("dashboard.errors.predictionGenericFailed");
   }
 
   const status = error.response?.status;
@@ -359,30 +361,32 @@ function resolvePredictionErrorMessage(error: unknown): string {
   const detail = typeof detailPayload?.detail === "string" ? detailPayload.detail : "";
 
   if (status === 401 || status === 403) {
-    return "Authentication token is invalid or expired. Please sign in again.";
+    return i18n.t("dashboard.errors.authInvalid");
   }
   if (status === 422 && detail) {
     return detail;
   }
   if (status === 429) {
-    return "Prediction service is busy. Please retry in a few seconds.";
+    return i18n.t("dashboard.errors.predictionBusy");
   }
   if (status === 503 && detail) {
-    return `Prediction service unavailable: ${detail}`;
+    return i18n.t("dashboard.errors.predictionServiceUnavailable", { detail });
   }
   if (detail) {
     return detail;
   }
 
   if (isTransientPredictionError(error)) {
-    return "Temporary network interruption while predicting. Retrying usually succeeds.";
+    return i18n.t("dashboard.errors.predictionTransient");
   }
 
-  return "Prediction request failed. Please verify backend /predict availability.";
+  return i18n.t("dashboard.errors.predictionVerifyBackend");
 }
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { t } = useTranslation();
+  const predictionPipelineSteps = usePredictionPipelineSteps();
   const browserTimeZone =
     Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
@@ -469,8 +473,8 @@ export default function Dashboard() {
     if (!predictionStage) {
       return null;
     }
-    return PREDICTION_PIPELINE_STEPS.find((step) => step.key === predictionStage) ?? null;
-  }, [predictionStage]);
+    return predictionPipelineSteps.find((step) => step.key === predictionStage) ?? null;
+  }, [predictionStage, predictionPipelineSteps]);
 
   const predictionProgress = useMemo<PredictionStageProgress[]>(() => {
     if (!loadingPrediction) {
@@ -478,14 +482,14 @@ export default function Dashboard() {
     }
 
     const activeIndex = predictionStage
-      ? PREDICTION_PIPELINE_STEPS.findIndex((step) => step.key === predictionStage)
+      ? predictionPipelineSteps.findIndex((step) => step.key === predictionStage)
       : -1;
 
-    return PREDICTION_PIPELINE_STEPS.map((step, index) => ({
+    return predictionPipelineSteps.map((step, index) => ({
       ...step,
       status: index < activeIndex ? "done" : index === activeIndex ? "active" : "pending",
     }));
-  }, [loadingPrediction, predictionStage]);
+  }, [loadingPrediction, predictionStage, predictionPipelineSteps]);
 
   const filteredSymbols = useMemo(() => {
     if (!debouncedQuery) {
@@ -676,10 +680,7 @@ export default function Dashboard() {
         attempt++;
         if (attempt >= maxAttempts) {
           setErrorMessage(
-            resolveApiErrorMessage(
-              error,
-              "Unable to load symbols. Check JWT token and backend availability.",
-            ),
+            resolveApiErrorMessage(error, t("dashboard.errors.loadSymbolsFailed")),
           );
         } else {
           const delay = 500 + Math.random() * 500;
@@ -691,7 +692,7 @@ export default function Dashboard() {
     if (!controller.signal.aborted) {
       setLoadingSymbols(false);
     }
-  }, [token, symbol, setLoadingSymbols, setErrorMessage, setSymbols, setSymbol]);
+  }, [token, symbol, setLoadingSymbols, setErrorMessage, setSymbols, setSymbol, t]);
 
   const loadChartProgressive = useCallback(
     async (
@@ -800,7 +801,7 @@ export default function Dashboard() {
           const transientError = isTransientChartError(error);
           if (transientError && recoveryAttempt < 1) {
             setApiStatus("online");
-            setErrorMessage("Network unstable while switching timeframe. Retrying chart load...");
+            setErrorMessage(t("dashboard.errors.chartSwitchRetry"));
 
             if (chartRecoveryTimerRef.current !== null) {
               window.clearTimeout(chartRecoveryTimerRef.current);
@@ -817,17 +818,14 @@ export default function Dashboard() {
 
           setApiStatus(transientError ? "online" : "offline");
           setErrorMessage(
-            resolveApiErrorMessage(
-              error,
-              "Unable to load chart data. Verify backend, token, and S3 parquet data.",
-            ),
+            resolveApiErrorMessage(error, t("dashboard.errors.chartLoadFailed")),
           );
           setChartCandles([]);
           return;
         }
 
         setApiStatus("online");
-        setErrorMessage("Loaded cached chart data. Live refresh will retry automatically.");
+        setErrorMessage(t("dashboard.errors.cachedChartLoaded"));
       } finally {
         if (activeChartRequestControllerRef.current === requestController) {
           activeChartRequestControllerRef.current = null;
@@ -842,6 +840,7 @@ export default function Dashboard() {
       setChartCandles,
       setApiStatus,
       setChartCacheEntry,
+      t,
     ],
   );
 
@@ -929,10 +928,7 @@ export default function Dashboard() {
         lastLazyLoadAnchorRef.current = null;
         setApiStatus(isTransientChartError(error) ? "online" : "offline");
         setErrorMessage(
-          resolveApiErrorMessage(
-            error,
-            "Unable to load older candles. Please retry after a moment.",
-          ),
+          resolveApiErrorMessage(error, t("dashboard.errors.olderCandlesFailed")),
         );
       } finally {
         setLoadingOlderCandles(false);
@@ -948,6 +944,7 @@ export default function Dashboard() {
       setChartCandles,
       setChartCacheEntry,
       setErrorMessage,
+      t,
     ],
   );
 
@@ -987,7 +984,7 @@ export default function Dashboard() {
       );
 
       if (predictionSource.length === 0) {
-        throw new Error("Unable to fetch latest market candles for prediction.");
+        throw new Error(t("dashboard.errors.fetchLatestCandlesFailed"));
       }
 
       const desiredPredictionCandles = Math.max(220, minimumChartCandles(timeframe));
@@ -1004,7 +1001,7 @@ export default function Dashboard() {
       await advancePredictionStage("fetch_external_context");
 
       if (predictionSource.length < 20) {
-        throw new Error("Prediction requires at least 20 real candles. Please wait for latest sync.");
+        throw new Error(t("dashboard.errors.minCandlesRequired"));
       }
 
       const mergedSnapshot = mergeCandles(chartCandlesRef.current, predictionSource);
@@ -1064,6 +1061,7 @@ export default function Dashboard() {
     setPrediction,
     setApiStatus,
     fetchChartWithBackfill,
+    t,
   ]);
 
   useEffect(() => {
@@ -1459,8 +1457,8 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="cosmic-shell flex h-screen flex-col overflow-hidden p-3 lg:p-4">
-      <div className="mx-auto flex h-full max-w-[1880px] flex-col gap-4">
+    <div className="cosmic-shell flex min-h-screen flex-col p-3 lg:p-4">
+      <div className="mx-auto flex w-full max-w-[1880px] flex-1 flex-col gap-4">
         <TopBar
           symbolSearch={searchQuery}
           onSymbolSearchChange={setSearchQuery}
@@ -1498,24 +1496,25 @@ export default function Dashboard() {
           <section className="glass-panel flex h-full min-w-0 flex-col rounded-2xl p-3 lg:p-4">
             <div className="mb-3 flex items-center justify-between gap-4 rounded-lg border border-violet-400/20 bg-cosmic-900/45 px-3 py-2">
               <div>
-                <p className="muted-label">Chart</p>
+                <p className="muted-label">{t("dashboard.chart")}</p>
                 <h2 className="text-lg font-semibold text-violet-50">
-                  {symbol} Candles ({timeframe})
+                  {t("dashboard.candlesTitle", { symbol, timeframe })}
                 </h2>
               </div>
               <div className="text-right">
                 <p className="text-xs text-violet-200/70">
                   {loadingChart
-                    ? "Loading recent candles..."
+                    ? t("dashboard.loadingRecentCandles")
                     : backgroundHydrating
-                      ? `Hydrating deeper history... (${chartCandles.length})`
+                      ? t("dashboard.hydratingHistory", { count: chartCandles.length })
                     : loadingOlderCandles
-                      ? `Loading older candles... (${chartCandles.length})`
-                      : `Candles loaded: ${chartCandles.length}${
-                          lastInitialLoadMs !== null && lastInitialLoadMs > 0
-                            ? ` · initial ${Math.round(lastInitialLoadMs)}ms`
-                            : ""
-                        }`}
+                      ? t("dashboard.loadingOlderCandles", { count: chartCandles.length })
+                      : lastInitialLoadMs !== null && lastInitialLoadMs > 0
+                        ? t("dashboard.candlesLoadedWithTiming", {
+                            count: chartCandles.length,
+                            ms: Math.round(lastInitialLoadMs),
+                          })
+                        : t("dashboard.candlesLoaded", { count: chartCandles.length })}
                 </p>
                 <RegionalClockBadge
                   timeZone={regionalClock.timeZone}

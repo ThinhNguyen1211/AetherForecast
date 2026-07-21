@@ -1,0 +1,222 @@
+{
+  "language": {
+    "en": "EN",
+    "vi": "VI"
+  },
+  "common": {
+    "close": "Close"
+  },
+  "landing": {
+    "badge": "AETHERFORECAST",
+    "title": "Cosmic Intelligence For Crypto and Gold Time-Series Forecasting",
+    "description": "Explore a production-grade trading dashboard powered by real market data, realtime stream updates, and machine learning forecasts. Sign in to unlock the full dashboard with live candles, prediction confidence bands, and advanced market signals.",
+    "signIn": "Sign in",
+    "signUp": "Sign up",
+    "highlightsTitle": "Platform Highlights",
+    "highlights": [
+      "Lightweight charting with MA, RSI, MACD, and forecast overlays",
+      "Realtime WebSocket candle stream with robust reconnect handling",
+      "Hugging Face Chronos forecasting pipeline integrated with sentiment"
+    ],
+    "protectedNotice": "Protected route is active: dashboard access requires a valid Cognito JWT session."
+  },
+  "topBar": {
+    "tagline": "Cosmic Trading Dashboard",
+    "searchSymbol": "Search Symbol",
+    "searchPlaceholder": "BTCUSDT",
+    "ticker": "Ticker",
+    "toggleLanguage": "Toggle language",
+    "account": "Account",
+    "loginRegister": "Login / Register",
+    "signOut": "Sign out",
+    "apiStatus": "API",
+    "wsStatus": "WS"
+  },
+  "sidebar": {
+    "markets": "Markets",
+    "filterPlaceholder": "Filter symbol",
+    "loadingSymbols": "Loading symbols...",
+    "noSymbols": "No symbols available.",
+    "spot": "spot"
+  },
+  "dashboard": {
+    "chart": "Chart",
+    "candlesTitle": "{{symbol}} Candles ({{timeframe}})",
+    "loadingRecentCandles": "Loading recent candles...",
+    "hydratingHistory": "Hydrating deeper history... ({{count}})",
+    "loadingOlderCandles": "Loading older candles... ({{count}})",
+    "candlesLoaded": "Candles loaded: {{count}}",
+    "candlesLoadedWithTiming": "Candles loaded: {{count}} · initial {{ms}}ms",
+    "errors": {
+      "loadSymbolsFailed": "Unable to load symbols. Check JWT token and backend availability.",
+      "networkInterrupted": "Network connection was interrupted while loading chart data. Retrying...",
+      "authInvalid": "Authentication token is invalid or expired. Please sign in again.",
+      "routeNotFound": "Requested API route was not found. Please verify backend deployment.",
+      "backendUnavailable": "Backend is temporarily unavailable. Please retry in a moment.",
+      "chartLoadFailed": "Unable to load chart data. Verify backend, token, and S3 parquet data.",
+      "chartSwitchRetry": "Network unstable while switching timeframe. Retrying chart load...",
+      "cachedChartLoaded": "Loaded cached chart data. Live refresh will retry automatically.",
+      "olderCandlesFailed": "Unable to load older candles. Please retry after a moment.",
+      "predictionGenericFailed": "Prediction request failed. Please retry.",
+      "predictionBusy": "Prediction service is busy. Please retry in a few seconds.",
+      "predictionServiceUnavailable": "Prediction service unavailable: {{detail}}",
+      "predictionTransient": "Temporary network interruption while predicting. Retrying usually succeeds.",
+      "predictionVerifyBackend": "Prediction request failed. Please verify backend /predict availability.",
+      "fetchLatestCandlesFailed": "Unable to fetch latest market candles for prediction.",
+      "minCandlesRequired": "Prediction requires at least 20 real candles. Please wait for latest sync."
+    }
+  },
+  "predictionPanel": {
+    "title": "Prediction",
+    "forecastTitle": "{{symbol}} Forecast",
+    "subtitle": "Horizon controls use hours/days and map to chart timeframe steps.",
+    "forecastHorizon": "Forecast Horizon",
+    "active": "Active: {{horizon}} requested, {{bars}} steps on {{timeframe}}.",
+    "generate": "Generate prediction",
+    "running": "Running: {{stage}}",
+    "pipelineTitle": "Prediction Pipeline",
+    "expectedMove": "Expected move",
+    "confidence": "Confidence",
+    "confidenceRange": "{{lower}} - {{upper}} (horizon target)",
+    "confidencePlaceholder": "Run a prediction to view confidence interval.",
+    "sentimentScore": "Sentiment Score (Auto)",
+    "sentimentSource": "Source: {{source}} ({{timeframe}})",
+    "sentimentPlaceholder": "Sentiment is computed automatically from latest market candles.",
+    "externalSentiment": "External: {{score}} ({{source}})",
+    "externalSentimentPlaceholder": "External sentiment is fetched from live macro/news/social feeds per prediction."
+  },
+  "predictionPipeline": {
+    "initializingTitle": "Initializing prediction pipeline",
+    "initializingDescription": "Preparing data and connecting to the model.",
+    "stages": {
+      "sync_market_data": {
+        "title": "Sync latest candles",
+        "description": "Fetch the latest chart data to avoid predicting on a stale snapshot."
+      },
+      "fetch_external_context": {
+        "title": "Gather market context",
+        "description": "Prepare sentiment and off-price context in the backend."
+      },
+      "prepare_payload": {
+        "title": "Normalize input data",
+        "description": "Combine candles and horizon into a unified payload for the model."
+      },
+      "send_request": {
+        "title": "Send prediction request",
+        "description": "Send the payload to the /predict endpoint."
+      },
+      "run_inference": {
+        "title": "Model is inferring",
+        "description": "Computing forecast array, confidence bands, and volatility."
+      },
+      "render_output": {
+        "title": "Render output to chart",
+        "description": "Draw the prediction line, forecast range, and update the panel."
+      }
+    }
+  },
+  "tradingChart": {
+    "generatingPrediction": "Generating prediction...",
+    "syncingChartData": "Syncing chart data...",
+    "syncingLatestMarketData": "Syncing latest market data...",
+    "emptyChartData": "Chart data is empty. Select a symbol and ensure API access token is valid.",
+    "invalidChartData": "Chart data was received but contains invalid timestamp or OHLCV values. Refresh history and verify backend candle formatting.",
+    "loadingOlderCandles": "Loading older candles...",
+    "legend": {
+      "livePrice": "Live candle price (realtime)",
+      "prediction": "Prediction (avg close)",
+      "forecastRange": "Forecast range (high/low)",
+      "clickHint": "Click chart to pin OHLC tooltip, Esc to close"
+    },
+    "tooltip": {
+      "forecast": "Forecast",
+      "market": "Market",
+      "open": "Open",
+      "high": "High",
+      "low": "Low",
+      "close": "Close",
+      "change": "Change",
+      "changePct": "% Change",
+      "range": "Range",
+      "volume": "Volume",
+      "closeHint": "Press Esc to close the info panel."
+    },
+    "rsi": "RSI (14)",
+    "macd": "MACD (12,26,9)"
+  },
+  "authModal": {
+    "signIn": "Sign In",
+    "createAccount": "Create Account",
+    "confirmAccount": "Confirm Account",
+    "signInDescription": "Sign in with Cognito email/password to unlock protected routes.",
+    "signUpDescription": "Create a Cognito account with your email and a strong password.",
+    "confirmDescription": "Enter the verification code sent to your email.",
+    "signOut": "Sign out",
+    "missingCognitoEnv": "Missing Cognito env: {{vars}}",
+    "signInTab": "Sign in",
+    "registerTab": "Register",
+    "emailPlaceholder": "Email",
+    "passwordPlaceholder": "Password",
+    "confirmPasswordPlaceholder": "Confirm password",
+    "verificationCodePlaceholder": "Verification code",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
+    "showConfirmPassword": "Show confirm password",
+    "hideConfirmPassword": "Hide confirm password",
+    "resendCode": "Resend code",
+    "close": "Close",
+    "processing": "Processing...",
+    "signInSubmit": "Sign in",
+    "createAccountSubmit": "Create account",
+    "verifyAndSignIn": "Verify and sign in",
+    "errors": {
+      "invalidEmail": "Please enter a valid email address.",
+      "passwordTooShort": "Password must have at least {{count}} characters.",
+      "passwordMismatch": "Password confirmation does not match.",
+      "verificationCodeRequired": "Verification code is required.",
+      "authFailed": "Authentication failed.",
+      "resendFailed": "Unable to resend code."
+    },
+    "success": {
+      "signedIn": "Signed in successfully.",
+      "accountCreatedSignedIn": "Account created and signed in.",
+      "verificationSent": "Verification code sent. Confirm account to continue.",
+      "accountConfirmedSignedIn": "Account confirmed and signed in.",
+      "codeResent": "A new verification code has been sent."
+    }
+  },
+  "aiCouncil": {
+    "title": "AI AGENT TEAM",
+    "analyzeButton": "Analyze & Generate Signals",
+    "analyzing": "Agents are analyzing strategy...",
+    "needPrediction": "Run ML Prediction first to unlock this feature.",
+    "councilReasoning": "Council Reasoning",
+    "hideTranscript": "Hide agent transcript",
+    "viewTranscript": "View full agent transcript",
+    "actionLabels": {
+      "LONG": "🟢 LONG",
+      "SHORT": "🔴 SHORT",
+      "HOLD": "⏸ HOLD"
+    },
+    "confidence": "Confidence",
+    "entryZone": "Entry Zone & Timing",
+    "leverage": "Leverage",
+    "positionSize": "Pos Size",
+    "takeProfit1": "Take Profit 1",
+    "takeProfit2": "Take Profit 2",
+    "tpSafe": "TP 1 (Safe)",
+    "tpMoon": "TP 2 (Moon)",
+    "stopLoss": "Hard Stop Loss",
+    "riskReward": "Risk/Reward (TP1)",
+    "invalidationPoint": "⚠️ Invalidation Point:",
+    "connecting": "Establishing secure connection to Aether AI Council...",
+    "authRequired": "Authentication required. Please sign in.",
+    "rateLimited": "⏳ Rate limit reached. Please try again later (max 5 requests/hour).",
+    "streamingUnsupported": "Streaming not supported by this browser.",
+    "parseFailed": "⚠️ Failed to parse result — raw output saved to console.",
+    "consensusReached": "✅ AI Agent Team has reached consensus.",
+    "consensusLine": "   Action: {{action}} | Confidence: {{confidence}}%",
+    "unavailable": "AI Agent Team is unavailable. Check DEEPSEEK_API_KEY configuration.",
+    "errorLabel": "Error:"
+  }
+}

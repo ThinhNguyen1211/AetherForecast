@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 interface SidebarProps {
   symbols: string[];
   selectedSymbol: string;
@@ -15,23 +17,25 @@ export default function Sidebar({
   onSearchQueryChange,
   onSelectSymbol,
 }: SidebarProps) {
+  const { t } = useTranslation();
+
   return (
     <aside className="glass-panel flex h-full flex-col rounded-2xl p-3">
       <div>
-        <p className="muted-label">Markets</p>
+        <p className="muted-label">{t("sidebar.markets")}</p>
         <input
           value={searchQuery}
           onChange={(event) => onSearchQueryChange(event.target.value.toUpperCase())}
-          placeholder="Filter symbol"
+          placeholder={t("sidebar.filterPlaceholder")}
           className="mt-2 w-full rounded-lg border border-violet-400/35 bg-cosmic-900/70 px-3 py-2 text-sm outline-none ring-neon-cyan/50 transition focus:ring"
         />
       </div>
 
       <div className="scrollbar-slim mt-3 flex-1 overflow-y-auto rounded-lg border border-violet-400/20 bg-cosmic-900/50">
         {loading ? (
-          <p className="px-3 py-4 text-sm text-violet-200/75">Loading symbols...</p>
+          <p className="px-3 py-4 text-sm text-violet-200/75">{t("sidebar.loadingSymbols")}</p>
         ) : symbols.length === 0 ? (
-          <p className="px-3 py-4 text-sm text-violet-200/75">No symbols available.</p>
+          <p className="px-3 py-4 text-sm text-violet-200/75">{t("sidebar.noSymbols")}</p>
         ) : (
           symbols.map((symbol) => (
             <button
@@ -45,7 +49,7 @@ export default function Sidebar({
               }`}
             >
               <span className="font-medium tracking-wide">{symbol}</span>
-              <span className="text-[10px] uppercase tracking-[0.14em] text-violet-300/70">spot</span>
+              <span className="text-[10px] uppercase tracking-[0.14em] text-violet-300/70">{t("sidebar.spot")}</span>
             </button>
           ))
         )}

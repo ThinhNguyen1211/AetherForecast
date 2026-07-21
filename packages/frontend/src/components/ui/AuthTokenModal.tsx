@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   COGNITO_MIN_PASSWORD_LENGTH,
@@ -62,6 +63,7 @@ export default function AuthTokenModal({
   onSignOut,
   onClose,
 }: AuthTokenModalProps) {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<AuthMode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -101,17 +103,17 @@ export default function AuthTokenModal({
 
   const modeTitle =
     mode === "signin"
-      ? "Sign In"
+      ? t("authModal.signIn")
       : mode === "signup"
-        ? "Create Account"
-        : "Confirm Account";
+        ? t("authModal.createAccount")
+        : t("authModal.confirmAccount");
 
   const modeDescription =
     mode === "signin"
-      ? "Sign in with Cognito email/password to unlock protected routes."
+      ? t("authModal.signInDescription")
       : mode === "signup"
-        ? "Create a Cognito account with your email and a strong password."
-        : "Enter the verification code sent to your email.";
+        ? t("authModal.signUpDescription")
+        : t("authModal.confirmDescription");
 
   const resetMessages = () => {
     setErrorMessage("");
@@ -132,12 +134,12 @@ export default function AuthTokenModal({
 
   const validateShared = (): boolean => {
     if (!isEmailLike(email)) {
-      setErrorMessage("Please enter a valid email address.");
+      setErrorMessage(t("authModal.errors.invalidEmail"));
       return false;
     }
 
     if (mode !== "confirm" && password.length < COGNITO_MIN_PASSWORD_LENGTH) {
-      setErrorMessage(`Password must have at least ${COGNITO_MIN_PASSWORD_LENGTH} characters.`);
+      setErrorMessage(t("authModal.errors.passwordTooShort", { count: COGNITO_MIN_PASSWORD_LENGTH }));
       return false;
     }
 
@@ -152,7 +154,7 @@ export default function AuthTokenModal({
     const authResult = await signInWithPassword(email, password);
     saveAuthSession(authResult);
     onAuthenticate(authResult.token);
-    setSuccessMessage("Signed in successfully.");
+    setSuccessMessage(t("authModal.success.signedIn"));
     onClose();
   };
 
@@ -162,7 +164,7 @@ export default function AuthTokenModal({
     }
 
     if (password !== confirmPassword) {
-      setErrorMessage("Password confirmation does not match.");
+      setErrorMessage(t("authModal.errors.passwordMismatch"));
       return;
     }
 
@@ -171,23 +173,23 @@ export default function AuthTokenModal({
       const authResult = await signInWithPassword(email, password);
       saveAuthSession(authResult);
       onAuthenticate(authResult.token);
-      setSuccessMessage("Account created and signed in.");
+      setSuccessMessage(t("authModal.success.accountCreatedSignedIn"));
       onClose();
       return;
     }
 
-    setSuccessMessage("Verification code sent. Confirm account to continue.");
+    setSuccessMessage(t("authModal.success.verificationSent"));
     setMode("confirm");
   };
 
   const handleConfirm = async () => {
     if (!isEmailLike(email)) {
-      setErrorMessage("Please enter a valid email address.");
+      setErrorMessage(t("authModal.errors.invalidEmail"));
       return;
     }
 
     if (!verificationCode.trim()) {
-      setErrorMessage("Verification code is required.");
+      setErrorMessage(t("authModal.errors.verificationCodeRequired"));
       return;
     }
 
@@ -195,7 +197,7 @@ export default function AuthTokenModal({
     const authResult = await signInWithPassword(email, password);
     saveAuthSession(authResult);
     onAuthenticate(authResult.token);
-    setSuccessMessage("Account confirmed and signed in.");
+    setSuccessMessage(t("authModal.success.accountConfirmedSignedIn"));
     onClose();
   };
 
@@ -212,7 +214,7 @@ export default function AuthTokenModal({
         await handleConfirm();
       }
     } catch (error) {
-      const nextMessage = error instanceof Error ? error.message : "Authentication failed.";
+      const nextMessage = error instanceof Error ? error.message : t("authModal.errors.authFailed");
       setErrorMessage(nextMessage);
     } finally {
       setIsSubmitting(false);
@@ -225,9 +227,9 @@ export default function AuthTokenModal({
 
     try {
       await resendSignUpCode(email);
-      setSuccessMessage("A new verification code has been sent.");
+      setSuccessMessage(t("authModal.success.codeResent"));
     } catch (error) {
-      const nextMessage = error instanceof Error ? error.message : "Unable to resend code.";
+      const nextMessage = error instanceof Error ? error.message : t("authModal.errors.resendFailed");
       setErrorMessage(nextMessage);
     } finally {
       setIsSubmitting(false);
@@ -253,14 +255,14 @@ export default function AuthTokenModal({
               className="rounded-lg border border-violet-400/35 px-3 py-2 text-xs text-violet-200 transition hover:border-violet-300/60"
               onClick={onSignOut}
             >
-              Sign out
+              {t("authModal.signOut")}
             </button>
           )}
         </div>
 
         {!cognitoConfig.isConfigured && (
           <div className="mt-4 rounded-lg border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
-            Missing Cognito env: {cognitoConfig.missingVariables.join(", ")}
+            {t("authModal.missingCognitoEnv", { vars: cognitoConfig.missingVariables.join(", ") })}
           </div>
         )}
 
@@ -274,7 +276,7 @@ export default function AuthTokenModal({
             }`}
             onClick={() => switchMode("signin")}
           >
-            Sign in
+            {t("authModal.signInTab")}
           </button>
           <button
             type="button"
@@ -285,7 +287,7 @@ export default function AuthTokenModal({
             }`}
             onClick={() => switchMode("signup")}
           >
-            Register
+            {t("authModal.registerTab")}
           </button>
         </div>
 
@@ -293,7 +295,7 @@ export default function AuthTokenModal({
           <div className="mt-4 space-y-3">
             <input
               className="w-full rounded-xl border border-violet-400/40 bg-cosmic-900/80 p-3 text-sm text-violet-50 outline-none ring-neon-cyan/50 transition focus:ring"
-              placeholder="Email"
+              placeholder={t("authModal.emailPlaceholder")}
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               autoComplete="email"
@@ -304,7 +306,7 @@ export default function AuthTokenModal({
                 <input
                   type={showPassword ? "text" : "password"}
                   className="w-full rounded-xl border border-violet-400/40 bg-cosmic-900/80 p-3 pr-12 text-sm text-violet-50 outline-none ring-neon-cyan/50 transition focus:ring"
-                  placeholder="Password"
+                  placeholder={t("authModal.passwordPlaceholder")}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   autoComplete={mode === "signin" ? "current-password" : "new-password"}
@@ -313,7 +315,7 @@ export default function AuthTokenModal({
                   type="button"
                   onClick={() => setShowPassword((value) => !value)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-violet-200/80 transition hover:text-cyan-200"
-                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-label={showPassword ? t("authModal.hidePassword") : t("authModal.showPassword")}
                 >
                   <EyeIcon visible={showPassword} />
                 </button>
@@ -325,7 +327,7 @@ export default function AuthTokenModal({
                 <input
                   type={showConfirmPassword ? "text" : "password"}
                   className="w-full rounded-xl border border-violet-400/40 bg-cosmic-900/80 p-3 pr-12 text-sm text-violet-50 outline-none ring-neon-cyan/50 transition focus:ring"
-                  placeholder="Confirm password"
+                  placeholder={t("authModal.confirmPasswordPlaceholder")}
                   value={confirmPassword}
                   onChange={(event) => setConfirmPassword(event.target.value)}
                   autoComplete="new-password"
@@ -334,7 +336,9 @@ export default function AuthTokenModal({
                   type="button"
                   onClick={() => setShowConfirmPassword((value) => !value)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-violet-200/80 transition hover:text-cyan-200"
-                  aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
+                  aria-label={
+                    showConfirmPassword ? t("authModal.hideConfirmPassword") : t("authModal.showConfirmPassword")
+                  }
                 >
                   <EyeIcon visible={showConfirmPassword} />
                 </button>
@@ -344,7 +348,7 @@ export default function AuthTokenModal({
             {mode === "confirm" && (
               <input
                 className="w-full rounded-xl border border-violet-400/40 bg-cosmic-900/80 p-3 text-sm text-violet-50 outline-none ring-neon-cyan/50 transition focus:ring"
-                placeholder="Verification code"
+                placeholder={t("authModal.verificationCodePlaceholder")}
                 value={verificationCode}
                 onChange={(event) => setVerificationCode(event.target.value)}
                 autoComplete="one-time-code"
@@ -372,7 +376,7 @@ export default function AuthTokenModal({
                 onClick={handleResendCode}
                 disabled={isSubmitting || !cognitoConfig.isConfigured}
               >
-                Resend code
+                {t("authModal.resendCode")}
               </button>
             )}
             <button
@@ -380,7 +384,7 @@ export default function AuthTokenModal({
               className="rounded-lg border border-violet-400/35 px-4 py-2 text-sm text-violet-100 transition hover:border-violet-300/60"
               onClick={onClose}
             >
-              Close
+              {t("authModal.close")}
             </button>
             <button
               type="submit"
@@ -388,12 +392,12 @@ export default function AuthTokenModal({
               disabled={isSubmitting || !cognitoConfig.isConfigured}
             >
               {isSubmitting
-                ? "Processing..."
+                ? t("authModal.processing")
                 : mode === "signin"
-                  ? "Sign in"
+                  ? t("authModal.signInSubmit")
                   : mode === "signup"
-                    ? "Create account"
-                    : "Verify and sign in"}
+                    ? t("authModal.createAccountSubmit")
+                    : t("authModal.verifyAndSignIn")}
             </button>
           </div>
         </form>

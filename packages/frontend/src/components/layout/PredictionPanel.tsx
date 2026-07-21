@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 import { PredictResponse, Timeframe } from "@/services/api";
 import { PredictionStageDefinition, PredictionStageProgress } from "@/types/predictionProgress";
 import AiCouncilPanel from "@/components/layout/AiCouncilPanel";
@@ -43,6 +45,7 @@ export default function PredictionPanel({
   onSelectHorizon,
   onPredict,
 }: PredictionPanelProps) {
+  const { t } = useTranslation();
   const horizonTargetPrice =
     prediction?.prediction_array[prediction.prediction_array.length - 1] ?? prediction?.predicted_price ?? null;
 
@@ -72,13 +75,13 @@ export default function PredictionPanel({
   return (
     <section className="glass-panel scrollbar-slim flex h-full flex-col overflow-y-auto rounded-2xl p-4">
       <div>
-        <p className="muted-label">Prediction</p>
-        <h2 className="mt-1 text-xl font-semibold text-violet-100">{symbol} Forecast</h2>
-        <p className="mt-1 text-xs text-violet-200/75">Horizon controls use hours/days and map to chart timeframe steps.</p>
+        <p className="muted-label">{t("predictionPanel.title")}</p>
+        <h2 className="mt-1 text-xl font-semibold text-violet-100">{t("predictionPanel.forecastTitle", { symbol })}</h2>
+        <p className="mt-1 text-xs text-violet-200/75">{t("predictionPanel.subtitle")}</p>
       </div>
 
       <div className="mt-4 rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-3">
-        <p className="muted-label">Forecast Horizon</p>
+        <p className="muted-label">{t("predictionPanel.forecastHorizon")}</p>
         <div className="mt-2 grid grid-cols-2 gap-2">
           {horizonOptions.map((option) => (
             <button
@@ -96,7 +99,11 @@ export default function PredictionPanel({
           ))}
         </div>
         <p className="mt-2 text-xs text-violet-200/75">
-          Active: {formatHoursToLabel(selectedHorizonHours)} requested, {selectedHorizonBars} steps on {timeframe}.
+          {t("predictionPanel.active", {
+            horizon: formatHoursToLabel(selectedHorizonHours),
+            bars: selectedHorizonBars,
+            timeframe,
+          })}
         </p>
       </div>
 
@@ -107,8 +114,10 @@ export default function PredictionPanel({
         className="mt-3 rounded-xl border border-cyan-300/70 bg-cyan-500/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {loading
-          ? `Đang chạy: ${activePredictionStage?.title ?? "Tạo dự đoán"}`
-          : "Generate prediction"}
+          ? t("predictionPanel.running", {
+              stage: activePredictionStage?.title ?? t("predictionPipeline.initializingTitle"),
+            })
+          : t("predictionPanel.generate")}
       </button>
 
       <div className="mb-3">
@@ -117,9 +126,9 @@ export default function PredictionPanel({
 
       {loading && predictionProgress.length > 0 && (
         <div className="mt-3 rounded-xl border border-cyan-300/35 bg-gradient-to-r from-cyan-500/10 via-violet-500/10 to-cosmic-900/65 p-3">
-          <p className="muted-label">Prediction Pipeline</p>
+          <p className="muted-label">{t("predictionPanel.pipelineTitle")}</p>
           <p className="mt-1 text-xs text-cyan-100/90">
-            {activePredictionStage?.description ?? "Đang khởi tạo luồng dự đoán."}
+            {activePredictionStage?.description ?? t("predictionPipeline.initializingDescription")}
           </p>
           <div className="mt-3 space-y-2">
             {predictionProgress.map((step, index) => (
@@ -153,38 +162,47 @@ export default function PredictionPanel({
       )}
 
       <div className="mt-3 rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-3">
-        <p className="muted-label">Expected move</p>
+        <p className="muted-label">{t("predictionPanel.expectedMove")}</p>
         <p className={`mt-1 text-xl font-semibold ${isUp ? "price-up" : "price-down"}`}>
           {deltaPct !== null ? `${isUp ? "+" : ""}${deltaPct.toFixed(2)}%` : "--"}
         </p>
       </div>
 
       <div className="mt-3 rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-3">
-        <p className="muted-label">Confidence</p>
+        <p className="muted-label">{t("predictionPanel.confidence")}</p>
         <p className="mt-1 text-lg font-semibold text-cyan-200">
           {prediction ? `${(prediction.confidence * 100).toFixed(1)}%` : "--"}
         </p>
         <p className="mt-2 text-xs text-violet-200/80">
           {prediction && lowerAtHorizon !== null && upperAtHorizon !== null
-            ? `${lowerAtHorizon.toFixed(6)} - ${upperAtHorizon.toFixed(6)} (horizon target)`
-            : "Run a prediction to view confidence interval."}
+            ? t("predictionPanel.confidenceRange", {
+                lower: lowerAtHorizon.toFixed(6),
+                upper: upperAtHorizon.toFixed(6),
+              })
+            : t("predictionPanel.confidencePlaceholder")}
         </p>
       </div>
 
       <div className="mt-4 rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-3">
-        <p className="muted-label">Sentiment Score (Auto)</p>
+        <p className="muted-label">{t("predictionPanel.sentimentScore")}</p>
         <p className="mt-1 text-lg font-semibold text-cyan-200">
           {prediction ? prediction.sentiment_score.toFixed(3) : "--"}
         </p>
         <p className="mt-1 text-xs text-violet-200/80">
           {prediction
-            ? `Source: ${prediction.sentiment_source} (${prediction.timeframe})`
-            : "Sentiment is computed automatically from latest market candles."}
+            ? t("predictionPanel.sentimentSource", {
+                source: prediction.sentiment_source,
+                timeframe: prediction.timeframe,
+              })
+            : t("predictionPanel.sentimentPlaceholder")}
         </p>
         <p className="mt-1 text-xs text-violet-200/80">
           {prediction
-            ? `External: ${prediction.external_sentiment_score.toFixed(3)} (${prediction.external_sentiment_source})`
-            : "External sentiment is fetched from live macro/news/social feeds per prediction."}
+            ? t("predictionPanel.externalSentiment", {
+                score: prediction.external_sentiment_score.toFixed(3),
+                source: prediction.external_sentiment_source,
+              })
+            : t("predictionPanel.externalSentimentPlaceholder")}
         </p>
       </div>
 

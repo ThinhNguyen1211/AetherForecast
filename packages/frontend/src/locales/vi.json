@@ -1,0 +1,222 @@
+{
+  "language": {
+    "en": "EN",
+    "vi": "VI"
+  },
+  "common": {
+    "close": "Đóng"
+  },
+  "landing": {
+    "badge": "AETHERFORECAST",
+    "title": "Trí Tuệ Vũ Trụ Cho Dự Báo Chuỗi Thời Gian Crypto và Vàng",
+    "description": "Khám phá bảng điều khiển giao dịch chuẩn production được vận hành bởi dữ liệu thị trường thực, cập nhật luồng thời gian thực và các dự đoán học máy. Đăng nhập để mở khóa toàn bộ dashboard với nến trực tiếp, dải tin cậy dự đoán và tín hiệu thị trường nâng cao.",
+    "signIn": "Đăng nhập",
+    "signUp": "Đăng ký",
+    "highlightsTitle": "Điểm Nổi Bật Của Nền Tảng",
+    "highlights": [
+      "Biểu đồ nhẹ với MA, RSI, MACD và lớp phủ dự báo",
+      "Luồng nến WebSocket thời gian thực với khả năng kết nối lại mạnh mẽ",
+      "Pipeline dự báo Hugging Face Chronos tích hợp cùng phân tích cảm xúc"
+    ],
+    "protectedNotice": "Route bảo vệ đang hoạt động: truy cập dashboard yêu cầu phiên JWT Cognito hợp lệ."
+  },
+  "topBar": {
+    "tagline": "Bảng Điều Khiển Giao Dịch Vũ Trụ",
+    "searchSymbol": "Tìm Mã",
+    "searchPlaceholder": "BTCUSDT",
+    "ticker": "Mã",
+    "toggleLanguage": "Chuyển ngôn ngữ",
+    "account": "Tài khoản",
+    "loginRegister": "Đăng nhập / Đăng ký",
+    "signOut": "Đăng xuất",
+    "apiStatus": "API",
+    "wsStatus": "WS"
+  },
+  "sidebar": {
+    "markets": "Thị trường",
+    "filterPlaceholder": "Lọc mã",
+    "loadingSymbols": "Đang tải danh sách mã...",
+    "noSymbols": "Không có mã nào khả dụng.",
+    "spot": "giao ngay"
+  },
+  "dashboard": {
+    "chart": "Biểu đồ",
+    "candlesTitle": "Nến {{symbol}} ({{timeframe}})",
+    "loadingRecentCandles": "Đang tải nến gần nhất...",
+    "hydratingHistory": "Đang tải thêm lịch sử... ({{count}})",
+    "loadingOlderCandles": "Đang tải nến cũ hơn... ({{count}})",
+    "candlesLoaded": "Đã tải: {{count}} nến",
+    "candlesLoadedWithTiming": "Đã tải: {{count}} nến · khởi tạo {{ms}}ms",
+    "errors": {
+      "loadSymbolsFailed": "Không thể tải danh sách mã. Kiểm tra JWT token và khả dụng của backend.",
+      "networkInterrupted": "Kết nối mạng bị gián đoạn khi tải dữ liệu biểu đồ. Đang thử lại...",
+      "authInvalid": "Token xác thực không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.",
+      "routeNotFound": "Không tìm thấy route API. Vui lòng kiểm tra lại việc triển khai backend.",
+      "backendUnavailable": "Backend tạm thời không khả dụng. Vui lòng thử lại sau.",
+      "chartLoadFailed": "Không thể tải dữ liệu biểu đồ. Kiểm tra backend, token và dữ liệu S3 parquet.",
+      "chartSwitchRetry": "Mạng không ổn định khi chuyển khung thời gian. Đang thử tải lại biểu đồ...",
+      "cachedChartLoaded": "Đã tải dữ liệu biểu đồ từ cache. Dữ liệu trực tiếp sẽ tự động thử lại.",
+      "olderCandlesFailed": "Không thể tải nến cũ hơn. Vui lòng thử lại sau.",
+      "predictionGenericFailed": "Yêu cầu dự đoán thất bại. Vui lòng thử lại.",
+      "predictionBusy": "Dịch vụ dự đoán đang bận. Vui lòng thử lại sau vài giây.",
+      "predictionServiceUnavailable": "Dịch vụ dự đoán không khả dụng: {{detail}}",
+      "predictionTransient": "Gián đoạn mạng tạm thời khi dự đoán. Thử lại thường sẽ thành công.",
+      "predictionVerifyBackend": "Yêu cầu dự đoán thất bại. Vui lòng kiểm tra backend /predict.",
+      "fetchLatestCandlesFailed": "Không thể lấy nến thị trường mới nhất để dự đoán.",
+      "minCandlesRequired": "Dự đoán yêu cầu ít nhất 20 nến thực. Vui lòng chờ đồng bộ mới nhất."
+    }
+  },
+  "predictionPanel": {
+    "title": "Dự đoán",
+    "forecastTitle": "Dự báo {{symbol}}",
+    "subtitle": "Điều khiển khung thời gian dùng giờ/ngày và ánh xạ theo bước khung nến của biểu đồ.",
+    "forecastHorizon": "Khung Dự báo",
+    "active": "Đang chọn: {{horizon}} yêu cầu, {{bars}} bước trên khung {{timeframe}}.",
+    "generate": "Tạo dự đoán",
+    "running": "Đang chạy: {{stage}}",
+    "pipelineTitle": "Luồng Xử lý Dự đoán",
+    "expectedMove": "Biến động dự kiến",
+    "confidence": "Độ tin cậy",
+    "confidenceRange": "{{lower}} - {{upper}} (mục tiêu theo khung dự báo)",
+    "confidencePlaceholder": "Chạy dự đoán để xem khoảng tin cậy.",
+    "sentimentScore": "Điểm Cảm xúc Thị trường (Tự động)",
+    "sentimentSource": "Nguồn: {{source}} ({{timeframe}})",
+    "sentimentPlaceholder": "Cảm xúc thị trường được tính tự động từ các nến gần nhất.",
+    "externalSentiment": "Bên ngoài: {{score}} ({{source}})",
+    "externalSentimentPlaceholder": "Cảm xúc bên ngoài được lấy từ các nguồn vĩ mô/tin tức/mạng xã hội trực tiếp theo mỗi lần dự đoán."
+  },
+  "predictionPipeline": {
+    "initializingTitle": "Đang khởi tạo pipeline dự đoán",
+    "initializingDescription": "Đang chuẩn bị dữ liệu và kết nối model.",
+    "stages": {
+      "sync_market_data": {
+        "title": "Đồng bộ nến mới nhất",
+        "description": "Lấy dữ liệu chart mới nhất để tránh dự đoán trên snapshot cũ."
+      },
+      "fetch_external_context": {
+        "title": "Thu thập ngữ cảnh thị trường",
+        "description": "Chuẩn bị sentiment và bối cảnh ngoài giá trong backend."
+      },
+      "prepare_payload": {
+        "title": "Chuẩn hóa dữ liệu đầu vào",
+        "description": "Gom candles và horizon thành payload thống nhất cho model."
+      },
+      "send_request": {
+        "title": "Gửi yêu cầu dự đoán",
+        "description": "Gửi payload tới endpoint /predict."
+      },
+      "run_inference": {
+        "title": "Model đang suy luận",
+        "description": "Tính forecast array, confidence bands và biến động."
+      },
+      "render_output": {
+        "title": "Xuất kết quả lên biểu đồ",
+        "description": "Vẽ prediction line, vùng dự báo và cập nhật panel."
+      }
+    }
+  },
+  "tradingChart": {
+    "generatingPrediction": "Đang tạo dự đoán...",
+    "syncingChartData": "Đang đồng bộ dữ liệu biểu đồ...",
+    "syncingLatestMarketData": "Đang đồng bộ dữ liệu thị trường mới nhất...",
+    "emptyChartData": "Dữ liệu biểu đồ trống. Hãy chọn một mã và đảm bảo token truy cập API hợp lệ.",
+    "invalidChartData": "Dữ liệu biểu đồ nhận được chứa timestamp hoặc giá trị OHLCV không hợp lệ. Làm mới lịch sử và kiểm tra định dạng nến từ backend.",
+    "loadingOlderCandles": "Đang tải nến cũ hơn...",
+    "legend": {
+      "livePrice": "Giá nến trực tiếp (thời gian thực)",
+      "prediction": "Dự đoán (giá đóng trung bình)",
+      "forecastRange": "Khoảng dự báo (cao/thấp)",
+      "clickHint": "Nhấp vào biểu đồ để ghim bảng OHLC, Esc để đóng"
+    },
+    "tooltip": {
+      "forecast": "Dự đoán",
+      "market": "Thị trường",
+      "open": "Giá mở",
+      "high": "Giá cao",
+      "low": "Giá thấp",
+      "close": "Giá đóng",
+      "change": "Thay đổi",
+      "changePct": "% Thay đổi",
+      "range": "Biên độ",
+      "volume": "Khối lượng",
+      "closeHint": "Nhấn Esc để đóng bảng thông tin."
+    },
+    "rsi": "RSI (14)",
+    "macd": "MACD (12,26,9)"
+  },
+  "authModal": {
+    "signIn": "Đăng Nhập",
+    "createAccount": "Tạo Tài Khoản",
+    "confirmAccount": "Xác Nhận Tài Khoản",
+    "signInDescription": "Đăng nhập bằng email/mật khẩu Cognito để mở khóa các route được bảo vệ.",
+    "signUpDescription": "Tạo tài khoản Cognito bằng email và mật khẩu mạnh.",
+    "confirmDescription": "Nhập mã xác nhận đã được gửi tới email của bạn.",
+    "signOut": "Đăng xuất",
+    "missingCognitoEnv": "Thiếu biến môi trường Cognito: {{vars}}",
+    "signInTab": "Đăng nhập",
+    "registerTab": "Đăng ký",
+    "emailPlaceholder": "Email",
+    "passwordPlaceholder": "Mật khẩu",
+    "confirmPasswordPlaceholder": "Xác nhận mật khẩu",
+    "verificationCodePlaceholder": "Mã xác nhận",
+    "showPassword": "Hiện mật khẩu",
+    "hidePassword": "Ẩn mật khẩu",
+    "showConfirmPassword": "Hiện mật khẩu xác nhận",
+    "hideConfirmPassword": "Ẩn mật khẩu xác nhận",
+    "resendCode": "Gửi lại mã",
+    "close": "Đóng",
+    "processing": "Đang xử lý...",
+    "signInSubmit": "Đăng nhập",
+    "createAccountSubmit": "Tạo tài khoản",
+    "verifyAndSignIn": "Xác nhận và đăng nhập",
+    "errors": {
+      "invalidEmail": "Vui lòng nhập địa chỉ email hợp lệ.",
+      "passwordTooShort": "Mật khẩu phải có ít nhất {{count}} ký tự.",
+      "passwordMismatch": "Mật khẩu xác nhận không khớp.",
+      "verificationCodeRequired": "Yêu cầu nhập mã xác nhận.",
+      "authFailed": "Xác thực thất bại.",
+      "resendFailed": "Không thể gửi lại mã."
+    },
+    "success": {
+      "signedIn": "Đăng nhập thành công.",
+      "accountCreatedSignedIn": "Đã tạo tài khoản và đăng nhập thành công.",
+      "verificationSent": "Đã gửi mã xác nhận. Xác nhận tài khoản để tiếp tục.",
+      "accountConfirmedSignedIn": "Đã xác nhận tài khoản và đăng nhập thành công.",
+      "codeResent": "Đã gửi mã xác nhận mới."
+    }
+  },
+  "aiCouncil": {
+    "title": "ĐỘI NGŨ AI",
+    "analyzeButton": "Phân tích & Lên Tín hiệu",
+    "analyzing": "Các tác nhân AI đang phân tích chiến lược...",
+    "needPrediction": "Chạy Dự đoán ML trước để mở khóa tính năng này.",
+    "councilReasoning": "Lập luận của Hội đồng",
+    "hideTranscript": "Ẩn bản ghi tác nhân",
+    "viewTranscript": "Xem toàn bộ bản ghi tác nhân",
+    "actionLabels": {
+      "LONG": "🟢 MUA",
+      "SHORT": "🔴 BÁN",
+      "HOLD": "⏸ Đứng ngoài"
+    },
+    "confidence": "Độ tin cậy",
+    "entryZone": "Vùng vào lệnh & Thời điểm",
+    "leverage": "Đòn bẩy",
+    "positionSize": "Kích thước vị thế",
+    "takeProfit1": "Chốt lời 1",
+    "takeProfit2": "Chốt lời 2",
+    "tpSafe": "CL 1 (An toàn)",
+    "tpMoon": "CL 2 (Mặt trăng)",
+    "stopLoss": "Cắt lỗ cứng",
+    "riskReward": "Rủi ro/Lợi nhuận (CL1)",
+    "invalidationPoint": "⚠️ Điểm vô hiệu hóa:",
+    "connecting": "Đang thiết lập kết nối bảo mật tới Hội đồng AI Aether...",
+    "authRequired": "Yêu cầu xác thực. Vui lòng đăng nhập.",
+    "rateLimited": "⏳ Đã đạt giới hạn tần suất. Vui lòng thử lại sau (tối đa 5 yêu cầu/giờ).",
+    "streamingUnsupported": "Trình duyệt này không hỗ trợ streaming.",
+    "parseFailed": "⚠️ Không thể phân tích kết quả — dữ liệu gốc đã được lưu vào console.",
+    "consensusReached": "✅ Đội ngũ AI đã đạt được đồng thuận.",
+    "consensusLine": "   Hành động: {{action}} | Độ tin cậy: {{confidence}}%",
+    "unavailable": "Đội ngũ AI hiện không khả dụng. Kiểm tra cấu hình DEEPSEEK_API_KEY.",
+    "errorLabel": "Lỗi:"
+  }
+}
