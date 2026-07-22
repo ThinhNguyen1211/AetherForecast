@@ -20,7 +20,7 @@ export default function Sidebar({
   const { t } = useTranslation();
 
   return (
-    <aside className="glass-panel flex h-full flex-col overflow-hidden rounded-2xl p-3">
+    <aside className="glass-panel flex flex-col h-full overflow-hidden rounded-2xl p-3">
       <div>
         <p className="muted-label">{t("sidebar.markets")}</p>
         <input

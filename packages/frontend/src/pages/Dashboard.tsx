@@ -1457,7 +1457,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="cosmic-shell fixed inset-0 h-screen w-screen flex flex-col overflow-hidden p-3 lg:p-4">
+    <div className="fixed inset-0 h-screen w-screen flex flex-col cosmic-shell overflow-hidden p-3 lg:p-4">
       <div className="mx-auto flex h-full w-full max-w-[1880px] flex-col gap-4">
         <TopBar
           symbolSearch={searchQuery}
@@ -1481,7 +1481,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        <div className="grid h-[calc(100vh-80px)] gap-4 lg:grid-cols-[280px_minmax(0,1fr)_360px] lg:items-stretch">
+        <div className="flex-1 grid grid-cols-[280px_minmax(0,1fr)_360px] h-full min-h-0 gap-4 overflow-hidden">
           <div className="flex h-full flex-col">
             <Sidebar
               symbols={filteredSymbols}

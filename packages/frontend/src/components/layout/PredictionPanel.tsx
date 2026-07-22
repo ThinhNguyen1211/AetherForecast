@@ -73,7 +73,7 @@ export default function PredictionPanel({
   const isUp = (deltaPct ?? 0) >= 0;
 
   return (
-    <section className="glass-panel flex h-full flex-col overflow-hidden rounded-2xl p-4">
+    <section className="glass-panel flex flex-col h-full overflow-hidden rounded-2xl p-4">
       <div>
         <p className="muted-label">{t("predictionPanel.title")}</p>
         <h2 className="mt-1 text-xl font-semibold text-violet-100">{t("predictionPanel.forecastTitle", { symbol })}</h2>
@@ -112,7 +112,7 @@ export default function PredictionPanel({
         type="button"
         onClick={onPredict}
         disabled={loading}
-        className="mt-3 rounded-xl border border-cyan-300/70 bg-cyan-500/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+        className="mt-3 w-full rounded-xl border border-cyan-300/70 bg-cyan-500/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {loading
           ? t("predictionPanel.running", {
