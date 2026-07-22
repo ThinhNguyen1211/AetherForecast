@@ -1457,8 +1457,8 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="fixed inset-0 h-screen w-screen flex flex-col cosmic-shell overflow-hidden p-3 lg:p-4">
-      <div className="mx-auto flex h-full w-full max-w-[1880px] flex-col gap-4">
+    <div className="h-screen w-screen overflow-hidden flex flex-col cosmic-shell">
+      <main className="flex-1 min-h-0 p-3 lg:p-4">
         <TopBar
           symbolSearch={searchQuery}
           onSymbolSearchChange={setSearchQuery}
@@ -1476,13 +1476,13 @@ export default function Dashboard() {
         />
 
         {errorMessage && (
-          <div className="rounded-xl border border-rose-400/50 bg-rose-500/15 px-4 py-2 text-sm text-rose-100">
+          <div className="mb-3 rounded-xl border border-rose-400/50 bg-rose-500/15 px-4 py-2 text-sm text-rose-100">
             {errorMessage}
           </div>
         )}
 
-        <div className="flex-1 grid grid-cols-[280px_minmax(0,1fr)_360px] h-full min-h-0 gap-4 overflow-hidden">
-          <div className="flex h-full flex-col">
+        <div className="h-full grid grid-cols-[280px_1fr_360px] gap-4">
+          <div className="h-full flex flex-col overflow-hidden">
             <Sidebar
               symbols={filteredSymbols}
               selectedSymbol={symbol}
@@ -1493,7 +1493,7 @@ export default function Dashboard() {
             />
           </div>
 
-          <section className="glass-panel flex h-full min-w-0 flex-col overflow-y-auto scrollbar-slim rounded-2xl p-3 lg:p-4">
+          <section className="glass-panel flex h-full min-w-0 flex-col overflow-hidden rounded-2xl p-3 lg:p-4">
             <div className="mb-3 flex items-center justify-between gap-4 rounded-lg border border-violet-400/20 bg-cosmic-900/45 px-3 py-2">
               <div>
                 <p className="muted-label">{t("dashboard.chart")}</p>
@@ -1523,24 +1523,26 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <TradingChart
-              key={`${symbol}-${timeframe}`}
-              symbol={symbol}
-              candles={chartCandles}
-              timeframe={timeframe}
-              prediction={prediction}
-              predictionAnchor={predictionAnchor}
-              timeZone={regionalClock.timeZone}
-              onRequestOlderCandles={loadOlderCandles}
-              isLoadingOlder={loadingOlderCandles}
-              isSyncing={!(chartDataReady && (wsStatus === "online" || wsConnectedOnce)) || backgroundHydrating}
-              isPredicting={loadingPrediction}
-              predictionProgress={predictionProgress}
-              activePredictionStage={activePredictionStage}
-            />
+            <div className="scrollbar-slim flex-1 overflow-y-auto">
+              <TradingChart
+                key={`${symbol}-${timeframe}`}
+                symbol={symbol}
+                candles={chartCandles}
+                timeframe={timeframe}
+                prediction={prediction}
+                predictionAnchor={predictionAnchor}
+                timeZone={regionalClock.timeZone}
+                onRequestOlderCandles={loadOlderCandles}
+                isLoadingOlder={loadingOlderCandles}
+                isSyncing={!(chartDataReady && (wsStatus === "online" || wsConnectedOnce)) || backgroundHydrating}
+                isPredicting={loadingPrediction}
+                predictionProgress={predictionProgress}
+                activePredictionStage={activePredictionStage}
+              />
+            </div>
           </section>
 
-          <div className="flex h-full flex-col">
+          <div className="h-full flex flex-col overflow-hidden">
             <PredictionPanel
               symbol={symbol}
               timeframe={timeframe}
@@ -1557,7 +1559,7 @@ export default function Dashboard() {
             />
           </div>
         </div>
-      </div>
+      </main>
 
       <AuthTokenModal
         open={showAuthModal}

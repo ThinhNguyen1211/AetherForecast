@@ -23,7 +23,7 @@ from typing import Any, Generator, Literal
 
 from crewai import Agent, Crew, Process, Task
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,14 @@ class AiCouncilDecision(BaseModel):
     """Final pro-trader decision output from the CrewAI pipeline."""
 
     action: TradeAction = Field(description="LONG, SHORT, or HOLD")
-    confidence: float = Field(ge=0.0, le=1.0, description="Confidence score [0,1]")
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Confidence score [0,1]. CRITICAL: If action is HOLD, this MUST be >= 0.80 "
+            "to reflect high certainty in capital preservation."
+        ),
+    )
     entry: float = Field(default=0.0, description="Suggested entry price (0 if HOLD)")
     entry_condition: str = Field(
         default="Market Order",
@@ -65,6 +72,22 @@ class AiCouncilDecision(BaseModel):
     take_profit_1: float = Field(default=0.0, description="Safe take-profit for 50% of position (0 if HOLD)")
     take_profit_2: float = Field(default=0.0, description="Aggressive take-profit for remaining 50% (0 if HOLD)")
     reasoning: str = Field(description="Concise human-readable rationale")
+
+    @model_validator(mode="after")
+    def enforce_hold_confidence(self) -> "AiCouncilDecision":
+        """Programmatically enforce high confidence for HOLD decisions.
+
+        The Execution Judge has repeatedly ignored the prompt instruction to output
+        high confidence for capital-preservation HOLDs. This validator overrides
+        any sub-threshold HOLD confidence to a high value.
+        """
+        if self.action == TradeAction.HOLD and self.confidence < 0.8:
+            logger.info(
+                "Enforcing HOLD confidence floor: %.2f -> 0.85 (capital preservation certainty)",
+                self.confidence,
+            )
+            self.confidence = 0.85
+        return self
 
 
 class MarketContext(BaseModel):
