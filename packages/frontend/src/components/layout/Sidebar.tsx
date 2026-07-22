@@ -31,7 +31,7 @@ export default function Sidebar({
         />
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto scrollbar-slim">
         {loading ? (
           <p className="px-3 py-4 text-sm text-violet-200/75">{t("sidebar.loadingSymbols")}</p>
         ) : symbols.length === 0 ? (

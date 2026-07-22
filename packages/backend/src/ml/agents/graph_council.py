@@ -150,6 +150,9 @@ def devil_advocate_node(state: CouncilState) -> CouncilState:
         "- strong_contradiction: the proposal contradicts clear technical evidence or ignores major risk.\n"
         "- weak_signal: the evidence is insufficient, the setup is marginal, or the risk/reward is poor.\n"
         "- acceptable: the proposal is well-supported and the risk/reward is reasonable.\n\n"
+        "CRITICAL LANGUAGE RULE: You MUST output your reasoning, analysis, and all values strictly in "
+        "ENGLISH. Do NOT translate professional trading terminology (e.g., Long, Short, Breakout, "
+        "Stop-Loss, Take-Profit, Volatility, Range-bound) into Vietnamese or any other language.\n\n"
         "Be skeptical. If in doubt, choose weak_signal."
     )
 
@@ -188,6 +191,9 @@ def risk_manager_node(state: CouncilState) -> CouncilState:
         "- CONSERVATIVE: leverage must be 2x-10x\n"
         "- BALANCED: leverage must be 11x-40x\n"
         "- DEGEN: leverage must be 41x-125x\n\n"
+        "CRITICAL LANGUAGE RULE: You MUST output your reasoning, analysis, and all values strictly in "
+        "ENGLISH. Do NOT translate professional trading terminology (e.g., Long, Short, Breakout, "
+        "Stop-Loss, Take-Profit, Volatility, Range-bound) into Vietnamese or any other language.\n\n"
         "Output: approved/reduced/vetoed, adjusted leverage (respect bounds), "
         "adjusted stop-loss, position_size_pct, invalidation_point, take_profit_1, take_profit_2, reasoning"
     )
@@ -231,7 +237,7 @@ def execution_judge_node(state: CouncilState) -> CouncilState:
         '  "invalidation_point": "<macro/technical invalidation>",\n'
         '  "take_profit_1": <float>,\n'
         '  "take_profit_2": <float>,\n'
-        f'  "reasoning": "<concise string in {market.language}>"\n'
+        '  "reasoning": "<concise string in English>"\n'
         "}\n\n"
         "Rules:\n"
         "- If Risk Manager vetoed, action MUST be HOLD with entry/SL/TPs = 0\n"
@@ -239,8 +245,10 @@ def execution_judge_node(state: CouncilState) -> CouncilState:
         "- Leverage MUST respect the risk profile bounds\n"
         "- Confidence reflects your conviction after both analyses\n"
         "- Reasoning should be 1-2 sentences max\n"
-        f"- The final 'reasoning' field in the JSON MUST be written in {market.language} "
-        "(if 'vi' use Vietnamese, if 'en' use English). All other keys and processes remain in English."
+        "- CRITICAL LANGUAGE RULE: The final 'reasoning' field in the JSON, your analysis, and "
+        "  all JSON values MUST be in ENGLISH. Do NOT translate professional trading terminology "
+        "  (e.g., Long, Short, Breakout, Stop-Loss, Take-Profit, Volatility, Range-bound) into "
+        "  Vietnamese or any other language."
     )
 
     llm = _build_reasoner_llm()

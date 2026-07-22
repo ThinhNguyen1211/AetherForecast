@@ -174,7 +174,11 @@ def _quant_analyst_agent(llm: Any) -> Any:
         backstory=(
             "You are a senior quantitative analyst at a top crypto hedge fund. "
             "You specialize in statistical forecasting models and technical analysis. "
-            "You are precise, data-driven, and never guess."
+            "You are precise, data-driven, and never guess. "
+            "CRITICAL LANGUAGE RULE: You MUST output your reasoning, analysis, and all values "
+            "strictly in ENGLISH. Do NOT translate professional trading terminology (e.g., Long, "
+            "Short, Breakout, Stop-Loss, Take-Profit, Volatility, Range-bound) into Vietnamese or "
+            "any other language."
         ),
         llm=llm,
         verbose=False,
@@ -195,7 +199,11 @@ def _devils_advocate_agent(llm: Any) -> Any:
             "You are a legendary short-seller and risk analyst. Your sole purpose is to "
             "challenge bullish or bearish narratives. You are cynical, evidence-driven, and "
             "never accept face-value arguments. You pride yourself on spotting the one reason "
-            "a trade will blow up."
+            "a trade will blow up. "
+            "CRITICAL LANGUAGE RULE: You MUST output your reasoning, analysis, and all values "
+            "strictly in ENGLISH. Do NOT translate professional trading terminology (e.g., Long, "
+            "Short, Breakout, Stop-Loss, Take-Profit, Volatility, Range-bound) into Vietnamese or "
+            "any other language."
         ),
         llm=llm,
         verbose=False,
@@ -225,7 +233,11 @@ def _risk_manager_agent(llm: Any, risk_profile: RiskProfile) -> Any:
             "you reduce leverage or veto the trade entirely. "
             f"The current trader risk profile is {risk_profile.value}. STRICT RULE: {leverage_rule} "
             "Never recommend leverage outside this range. Also define position_size_pct, "
-            "invalidation_point, and split take-profit levels (take_profit_1 safe, take_profit_2 aggressive)."
+            "invalidation_point, and split take-profit levels (take_profit_1 safe, take_profit_2 aggressive). "
+            "CRITICAL LANGUAGE RULE: You MUST output your reasoning, analysis, and all values "
+            "strictly in ENGLISH. Do NOT translate professional trading terminology (e.g., Long, "
+            "Short, Breakout, Stop-Loss, Take-Profit, Volatility, Range-bound) into Vietnamese or "
+            "any other language."
         ),
         llm=llm,
         verbose=False,
@@ -253,7 +265,11 @@ def _execution_judge_agent(llm: Any) -> Any:
             "action is HOLD. Therefore, if you strongly agree that HOLD is the safest choice to protect "
             "capital, your confidence score MUST be dynamically calculated as HIGH (e.g., > 0.80). It is "
             "completely illogical to output a low confidence score for a HOLD action when all evidence "
-            "points to staying out of the market. Be highly confident in your decision to preserve capital."
+            "points to staying out of the market. Be highly confident in your decision to preserve capital. "
+            "CRITICAL LANGUAGE RULE: You MUST output your reasoning, analysis, and all JSON values "
+            "strictly in ENGLISH. Do NOT translate professional trading terminology (e.g., Long, "
+            "Short, Breakout, Stop-Loss, Take-Profit, Volatility, Range-bound) into Vietnamese or "
+            "any other language. The final 'reasoning' field must be in English."
         ),
         llm=llm,
         verbose=False,
@@ -379,8 +395,10 @@ def _build_tasks(
             "  completely illogical to output a low confidence score for a HOLD action when all evidence "
             "  points to staying out of the market. Be highly confident in your decision to preserve capital.\n"
             "- Reasoning should be 1-2 sentences max\n"
-            f"- The final 'reasoning' field in the JSON MUST be written in {market.language} "
-            "(if 'vi' use Vietnamese, if 'en' use English). All other keys and processes remain in English."
+            "- CRITICAL LANGUAGE RULE: The final 'reasoning' field in the JSON, your analysis, and "
+            "  all JSON values MUST be in ENGLISH. Do NOT translate professional trading terminology "
+            "  (e.g., Long, Short, Breakout, Stop-Loss, Take-Profit, Volatility, Range-bound) into "
+            "  Vietnamese or any other language."
         ),
         expected_output="A single valid JSON object matching the AiCouncilDecision schema.",
         agent=judge,
