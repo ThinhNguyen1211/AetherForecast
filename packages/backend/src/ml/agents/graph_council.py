@@ -8,16 +8,19 @@ explicit iteration_count cap.
 
 import json
 import logging
+import threading
+import traceback
+from collections.abc import Generator
+from queue import Empty, Queue
 from typing import Any, TypedDict
 
-from crewai import Agent, Task
+from crewai import Task
 from langgraph.graph import END, StateGraph
 
 from src.ml.agents.crew import (
     AiCouncilDecision,
     MarketContext,
     RiskProfile,
-    TradeAction,
     _build_chat_llm,
     _build_reasoner_llm,
     _devils_advocate_agent,
@@ -44,6 +47,7 @@ class AiCouncilState(TypedDict):
     risk_assessment: dict[str, Any]
     final_decision: dict[str, Any]
     iteration_count: int
+    event_queue: Queue[str | object] | None
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +69,13 @@ def _market_context_from_state(state: AiCouncilState) -> MarketContext:
     return MarketContext(**data)
 
 
+def _emit_info(state: AiCouncilState, message: str) -> None:
+    """Push a streaming info event to the frontend terminal if a queue exists."""
+    queue = state.get("event_queue")
+    if queue is not None:
+        queue.put(f"[INFO] {message}")
+
+
 # ---------------------------------------------------------------------------
 # Node Functions
 # ---------------------------------------------------------------------------
@@ -75,6 +86,11 @@ def quant_analyst_node(state: AiCouncilState) -> dict[str, Any]:
     market_json = json.dumps(state["market_data"], indent=2)
     iteration = state.get("iteration_count", 0) + 1
 
+    _emit_info(
+        state,
+        f"📊 Quant Analyst is evaluating the market (Iteration {iteration}/{MAX_DEBATE_ITERATIONS})",
+    )
+
     prompt = (
         f"Analyze the following market data and Chronos-2 forecast "
         f"(Risk Profile: {market.risk_profile.value}, Iteration: {iteration}):\n\n"
@@ -82,6 +98,10 @@ def quant_analyst_node(state: AiCouncilState) -> dict[str, Any]:
     )
 
     if iteration > 1 and state.get("devil_critique"):
+        _emit_info(
+            state,
+            "🔄 Devil's Advocate forced a re-evaluation; Quant Analyst is addressing contradictions",
+        )
         critique_json = json.dumps(state["devil_critique"], indent=2)
         prompt += (
             "\nThe Devil's Advocate raised the following critique in the previous round. "
@@ -139,6 +159,7 @@ def quant_analyst_node(state: AiCouncilState) -> dict[str, Any]:
 
 def devils_advocate_node(state: AiCouncilState) -> dict[str, Any]:
     """Devil's Advocate attacks the Quant Analyst's signal."""
+    _emit_info(state, "😈 Devil's Advocate is stress-testing the Quant signal")
     market_json = json.dumps(state["market_data"], indent=2)
     quant_json = json.dumps(state["quant_signal"], indent=2)
 
@@ -184,6 +205,7 @@ def devils_advocate_node(state: AiCouncilState) -> dict[str, Any]:
 
 def risk_manager_node(state: AiCouncilState) -> dict[str, Any]:
     """Risk Manager evaluates the signal against risk factors and critique."""
+    _emit_info(state, "🛡️ Risk Manager is weighing signal against risk factors")
     market = _market_context_from_state(state)
     market_json = json.dumps(state["market_data"], indent=2)
     quant_json = json.dumps(state["quant_signal"], indent=2)
@@ -243,6 +265,7 @@ def risk_manager_node(state: AiCouncilState) -> dict[str, Any]:
 
 def execution_judge_node(state: AiCouncilState) -> dict[str, Any]:
     """Execution Judge synthesizes all inputs into the final AiCouncilDecision."""
+    _emit_info(state, "⚖️ Execution Judge is rendering the final decision")
     market = _market_context_from_state(state)
     market_json = json.dumps(state["market_data"], indent=2)
     quant_json = json.dumps(state["quant_signal"], indent=2)
@@ -336,7 +359,19 @@ def route_after_devil(state: AiCouncilState) -> str:
             iteration_count,
             MAX_DEBATE_ITERATIONS,
         )
+        _emit_info(
+            state,
+            f"🔄 Severe contradictions detected — routing back to Quant Analyst (Iteration {iteration_count + 1}/{MAX_DEBATE_ITERATIONS})",
+        )
         return "quant_analyst"
+
+    if severe:
+        _emit_info(
+            state,
+            f"⚠️ Severe contradictions remain but max debate iterations ({MAX_DEBATE_ITERATIONS}) reached — proceeding to Risk Manager",
+        )
+    else:
+        _emit_info(state, "✅ Devil's Advocate critique complete — proceeding to Risk Manager")
 
     return "risk_manager"
 
@@ -386,7 +421,87 @@ def run_ai_council_graph(market: MarketContext) -> AiCouncilDecision:
         "risk_assessment": {},
         "final_decision": {},
         "iteration_count": 0,
+        "event_queue": None,
     }
 
     final_state = graph.invoke(initial_state)
     return AiCouncilDecision(**final_state["final_decision"])
+
+
+def run_ai_council_graph_streaming(
+    market: MarketContext,
+) -> Generator[str, None, None]:
+    """Run the cyclic AI Council in a background thread and yield SSE events.
+
+    Yields the same SSE protocol as the legacy CrewAI streaming function:
+        data: [CONNECTED]\n\n
+        data: [INFO] ...\n\n
+        data: [FINAL_RESULT]:<compact AiCouncilDecision JSON>\n\n
+        data: [ERROR]:...\n\n
+    """
+    event_queue: Queue[str | object] = Queue()
+    sentinel = object()
+
+    def _run_council() -> None:
+        """Background worker: runs the blocking LangGraph pipeline."""
+        try:
+            graph = build_ai_council_graph()
+            initial_state: AiCouncilState = {
+                "market_data": market.model_dump(mode="json"),
+                "quant_signal": {},
+                "devil_critique": {},
+                "risk_assessment": {},
+                "final_decision": {},
+                "iteration_count": 0,
+                "event_queue": event_queue,
+            }
+            final_state = graph.invoke(initial_state)
+            decision = AiCouncilDecision(**final_state["final_decision"])
+            compact_json = json.dumps(decision.model_dump(), separators=(",", ":"))
+            event_queue.put(f"[FINAL_RESULT]:{compact_json}")
+        except Exception as exc:
+            logger.exception("LangGraph council failed")
+            error_tb = traceback.format_exc().replace("\n", " | ")
+            event_queue.put(f"[ERROR]:LangGraph council failed - {type(exc).__name__}: {exc}")
+            event_queue.put(f"[TRACE]:{error_tb}")
+        finally:
+            event_queue.put(sentinel)
+
+    # Flush headers immediately so the browser doesn't hang on provisional headers.
+    yield "data: [CONNECTED]\n\n"
+
+    thread = threading.Thread(target=_run_council, daemon=True)
+    thread.start()
+
+    try:
+        while True:
+            try:
+                item = event_queue.get(timeout=15)
+            except Empty:
+                yield "data: [KEEPALIVE]\n\n"
+                continue
+
+            if item is sentinel:
+                break
+
+            message = str(item)
+
+            # Protocol messages must be emitted as a single data: line.
+            if (
+                message.startswith("[FINAL_RESULT]:")
+                or message.startswith("[ERROR]:")
+                or message.startswith("[TRACE]:")
+                or message.startswith("[INFO]")
+            ):
+                yield f"data: {message}\n\n"
+                continue
+
+            # Regular multi-line agent output — split per SSE spec.
+            for line in message.split("\n"):
+                yield f"data: {line}\n"
+            yield "\n"
+    except Exception as gen_exc:
+        logger.exception("SSE generator crash")
+        error_tb = traceback.format_exc().replace("\n", " | ")
+        yield f"data: [ERROR]:SSE Stream Error - {type(gen_exc).__name__}: {gen_exc}\n\n"
+        yield f"data: [TRACE]:{error_tb}\n\n"
