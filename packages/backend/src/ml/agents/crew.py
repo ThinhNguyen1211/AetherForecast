@@ -23,7 +23,7 @@ from typing import Any, Generator, Literal
 
 from crewai import Agent, Crew, Process, Task
 from langchain_openai import ChatOpenAI
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +47,7 @@ class AiCouncilDecision(BaseModel):
     """Final pro-trader decision output from the CrewAI pipeline."""
 
     action: TradeAction = Field(description="LONG, SHORT, or HOLD")
-    confidence: float = Field(
-        ge=0.0,
-        le=1.0,
-        description=(
-            "Confidence score [0,1]. CRITICAL: If action is HOLD, this MUST be >= 0.80 "
-            "to reflect high certainty in capital preservation."
-        ),
-    )
+    confidence: float = Field(ge=0.0, le=1.0, description="Confidence score [0,1]")
     entry: float = Field(default=0.0, description="Suggested entry price (0 if HOLD)")
     entry_condition: str = Field(
         default="Market Order",
@@ -72,22 +65,6 @@ class AiCouncilDecision(BaseModel):
     take_profit_1: float = Field(default=0.0, description="Safe take-profit for 50% of position (0 if HOLD)")
     take_profit_2: float = Field(default=0.0, description="Aggressive take-profit for remaining 50% (0 if HOLD)")
     reasoning: str = Field(description="Concise human-readable rationale")
-
-    @model_validator(mode="after")
-    def enforce_hold_confidence(self) -> "AiCouncilDecision":
-        """Programmatically enforce high confidence for HOLD decisions.
-
-        The Execution Judge has repeatedly ignored the prompt instruction to output
-        high confidence for capital-preservation HOLDs. This validator overrides
-        any sub-threshold HOLD confidence to a high value.
-        """
-        if self.action == TradeAction.HOLD and self.confidence < 0.8:
-            logger.info(
-                "Enforcing HOLD confidence floor: %.2f -> 0.85 (capital preservation certainty)",
-                self.confidence,
-            )
-            self.confidence = 0.85
-        return self
 
 
 class MarketContext(BaseModel):
@@ -269,7 +246,14 @@ def _execution_judge_agent(llm: Any) -> Any:
         backstory=(
             "You are the Head of Execution at a systematic trading firm. "
             "You make the final call. You balance opportunity against risk. "
-            "Your output must be precise, actionable, and in valid JSON format."
+            "Your output must be precise, actionable, and in valid JSON format. "
+            "CRITICAL DEFINITION OF CONFIDENCE: Your confidence score does NOT measure your certainty "
+            "of the market's direction. It measures your certainty IN YOUR CHOSEN ACTION. If the consensus "
+            "from the Quant and Risk agents is that the market lacks an edge, the fundamentally correct "
+            "action is HOLD. Therefore, if you strongly agree that HOLD is the safest choice to protect "
+            "capital, your confidence score MUST be dynamically calculated as HIGH (e.g., > 0.80). It is "
+            "completely illogical to output a low confidence score for a HOLD action when all evidence "
+            "points to staying out of the market. Be highly confident in your decision to preserve capital."
         ),
         llm=llm,
         verbose=False,
@@ -387,13 +371,13 @@ def _build_tasks(
             "  consider HOLD or reduce leverage/confidence accordingly\n"
             "- If reduced, apply the Risk Manager's leverage and stop-loss adjustments\n"
             "- Leverage MUST respect the risk profile bounds\n"
-            "- CRITICAL: If your final action is HOLD because the market is untradable (e.g., neutral bias, "
-            "  no edge, low volatility), your confidence score MUST reflect your certainty in the decision "
-            "  to protect capital. Therefore, a well-reasoned HOLD decision should generate a HIGH confidence "
-            "  score. Calculate this score dynamically based on the strength of the consensus to hold. "
-            "  DO NOT blindly copy the Quant Analyst's low confidence score, and absolutely DO NOT hardcode "
-            "  or fixate on any specific number.\n"
-            "- Confidence reflects your conviction after weighing Quant + Devil's Advocate + Risk Manager\n"
+            "- CRITICAL DEFINITION OF CONFIDENCE: Your confidence score does NOT measure your certainty "
+            "  of the market's direction. It measures your certainty IN YOUR CHOSEN ACTION. If the consensus "
+            "  from the Quant and Risk agents is that the market lacks an edge, the fundamentally correct "
+            "  action is HOLD. Therefore, if you strongly agree that HOLD is the safest choice to protect "
+            "  capital, your confidence score MUST be dynamically calculated as HIGH (e.g., > 0.80). It is "
+            "  completely illogical to output a low confidence score for a HOLD action when all evidence "
+            "  points to staying out of the market. Be highly confident in your decision to preserve capital.\n"
             "- Reasoning should be 1-2 sentences max\n"
             f"- The final 'reasoning' field in the JSON MUST be written in {market.language} "
             "(if 'vi' use Vietnamese, if 'en' use English). All other keys and processes remain in English."

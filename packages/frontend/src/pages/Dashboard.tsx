@@ -1457,32 +1457,28 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex flex-col cosmic-shell">
-      <main className="flex-1 min-h-0 p-3 lg:p-4">
-        <TopBar
-          symbolSearch={searchQuery}
-          onSymbolSearchChange={setSearchQuery}
-          symbol={symbol}
-          livePrice={ticker.price}
-          changePct={ticker.changePct}
-          changeLabel={ticker.changeLabel}
-          apiStatus={apiStatus}
-          wsStatus={wsStatus}
-          timeframe={timeframe}
-          onTimeframeChange={(value: Timeframe) => setTimeframe(value)}
-          isAuthenticated={Boolean(token)}
-          onOpenAuthModal={() => setShowAuthModal(true)}
-          onSignOut={handleSignOut}
-        />
+    <>
+      <div className="h-screen w-screen overflow-hidden bg-background flex flex-col">
+        <div className="flex-none">
+          <TopBar
+            symbolSearch={searchQuery}
+            onSymbolSearchChange={setSearchQuery}
+            symbol={symbol}
+            livePrice={ticker.price}
+            changePct={ticker.changePct}
+            changeLabel={ticker.changeLabel}
+            apiStatus={apiStatus}
+            wsStatus={wsStatus}
+            timeframe={timeframe}
+            onTimeframeChange={(value: Timeframe) => setTimeframe(value)}
+            isAuthenticated={Boolean(token)}
+            onOpenAuthModal={() => setShowAuthModal(true)}
+            onSignOut={handleSignOut}
+          />
+        </div>
 
-        {errorMessage && (
-          <div className="mb-3 rounded-xl border border-rose-400/50 bg-rose-500/15 px-4 py-2 text-sm text-rose-100">
-            {errorMessage}
-          </div>
-        )}
-
-        <div className="h-full grid grid-cols-[280px_1fr_360px] gap-4">
-          <div className="h-full flex flex-col overflow-hidden">
+        <div className="flex flex-row h-[calc(100vh-80px)] w-full overflow-hidden p-3 lg:p-4 gap-4">
+          <aside className="w-[280px] h-full flex-shrink-0 flex flex-col overflow-hidden">
             <Sidebar
               symbols={filteredSymbols}
               selectedSymbol={symbol}
@@ -1491,9 +1487,15 @@ export default function Dashboard() {
               onSearchQueryChange={setSearchQuery}
               onSelectSymbol={setSymbol}
             />
-          </div>
+          </aside>
 
-          <section className="glass-panel flex h-full min-w-0 flex-col overflow-hidden rounded-2xl p-3 lg:p-4">
+          <main className="flex-1 min-w-0 h-full flex flex-col overflow-y-auto scrollbar-slim rounded-2xl glass-panel p-3 lg:p-4">
+            {errorMessage && (
+              <div className="mb-3 rounded-xl border border-rose-400/50 bg-rose-500/15 px-4 py-2 text-sm text-rose-100">
+                {errorMessage}
+              </div>
+            )}
+
             <div className="mb-3 flex items-center justify-between gap-4 rounded-lg border border-violet-400/20 bg-cosmic-900/45 px-3 py-2">
               <div>
                 <p className="muted-label">{t("dashboard.chart")}</p>
@@ -1523,7 +1525,7 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div className="scrollbar-slim flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto">
               <TradingChart
                 key={`${symbol}-${timeframe}`}
                 symbol={symbol}
@@ -1540,9 +1542,9 @@ export default function Dashboard() {
                 activePredictionStage={activePredictionStage}
               />
             </div>
-          </section>
+          </main>
 
-          <div className="h-full flex flex-col overflow-hidden">
+          <aside className="w-[360px] h-full flex-shrink-0 flex flex-col overflow-hidden">
             <PredictionPanel
               symbol={symbol}
               timeframe={timeframe}
@@ -1557,9 +1559,9 @@ export default function Dashboard() {
               onSelectHorizon={setSelectedHorizonHours}
               onPredict={runPrediction}
             />
-          </div>
+          </aside>
         </div>
-      </main>
+      </div>
 
       <AuthTokenModal
         open={showAuthModal}
@@ -1568,6 +1570,6 @@ export default function Dashboard() {
         onSignOut={handleSignOut}
         onClose={() => setShowAuthModal(false)}
       />
-    </div>
+    </>
   );
 }

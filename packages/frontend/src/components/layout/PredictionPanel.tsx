@@ -80,7 +80,8 @@ export default function PredictionPanel({
         <p className="mt-1 text-xs text-violet-200/75">{t("predictionPanel.subtitle")}</p>
       </div>
 
-      <div className="scrollbar-slim mt-3 flex-1 overflow-y-auto pr-1">
+      <div className="flex-1 overflow-y-auto">
+        <div className="scrollbar-slim pr-1">
         <div className="rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-3">
         <p className="muted-label">{t("predictionPanel.forecastHorizon")}</p>
         <div className="mt-2 grid grid-cols-2 gap-2">
@@ -205,6 +206,7 @@ export default function PredictionPanel({
               })
             : t("predictionPanel.externalSentimentPlaceholder")}
         </p>
+      </div>
       </div>
       </div>
 
