@@ -194,11 +194,11 @@
     "hideTranscript": "Ẩn bản ghi tác nhân",
     "viewTranscript": "Xem toàn bộ bản ghi tác nhân",
     "actionLabels": {
-      "LONG": "🟢 MUA",
-      "SHORT": "🔴 BÁN",
-      "HOLD": "⏸ Đứng ngoài"
+      "LONG": "LONG",
+      "SHORT": "SHORT",
+      "HOLD": "HOLD"
     },
-    "confidence": "Độ tin cậy",
+    "confidence": "Confidence",
     "entryZone": "Vùng vào lệnh & Thời điểm",
     "leverage": "Đòn bẩy",
     "positionSize": "Kích thước vị thế",
@@ -214,8 +214,8 @@
     "rateLimited": "⏳ Đã đạt giới hạn tần suất. Vui lòng thử lại sau (tối đa 5 yêu cầu/giờ).",
     "streamingUnsupported": "Trình duyệt này không hỗ trợ streaming.",
     "parseFailed": "⚠️ Không thể phân tích kết quả — dữ liệu gốc đã được lưu vào console.",
-    "consensusReached": "✅ Đội ngũ AI đã đạt được đồng thuận.",
-    "consensusLine": "   Hành động: {{action}} | Độ tin cậy: {{confidence}}%",
+    "consensusReached": "✅ AI Agent Team has reached consensus.",
+    "consensusLine": "   Action: {{action}} | Confidence: {{confidence}}%",
     "unavailable": "Đội ngũ AI hiện không khả dụng. Kiểm tra cấu hình DEEPSEEK_API_KEY.",
     "errorLabel": "Lỗi:"
   }

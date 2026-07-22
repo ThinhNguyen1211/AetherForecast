@@ -305,7 +305,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
           {/* Action + Confidence badge row */}
           <div className={`flex items-center gap-3 rounded-xl border p-3 ${style.badge} ${style.glow}`}>
             <span className="text-xl font-black tracking-wider">
-              {t(`aiCouncil.actionLabels.${finalDecision.action}`)}
+              {finalDecision.action}
             </span>
             <div className="ml-auto flex flex-col items-end">
               <span className="text-[10px] uppercase tracking-wider opacity-60">{t("aiCouncil.confidence")}</span>
