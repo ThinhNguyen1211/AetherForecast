@@ -7,6 +7,7 @@ Final event contains [FINAL_RESULT]:<AiCouncilDecision JSON>.
 Rate limited to 5 requests per hour per IP.
 """
 
+import asyncio
 import logging
 import traceback
 from collections.abc import Generator
@@ -26,10 +27,11 @@ from src.dependencies.s3_client import S3ParquetClient, get_s3_parquet_client
 from src.ml.agents.crew import (
     MarketContext,
     RiskProfile,
-    run_trading_crew_streaming,
 )
+from src.ml.agents.graph_council import run_graph_council_streaming
 from src.ml.inference import ForecastInferenceService, get_inference_service
 from src.ml.schemas import Candle, PredictRequest
+from src.services.external_data import fetch_fear_greed, fetch_funding_rate
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai-council"])
@@ -133,7 +135,13 @@ async def ai_analyze(
                 media_type="text/event-stream",
             )
 
-        # --- Step 3: Build MarketContext from forecast + candles ---
+        # --- Step 3: Fetch real external market data (never mocked) ---
+        fear_greed_index, funding_rate = await asyncio.gather(
+            fetch_fear_greed(),
+            fetch_funding_rate(symbol),
+        )
+
+        # --- Step 4: Build MarketContext from forecast + candles + real data ---
         closes = np.array([c["close"] for c in raw_candles[-50:]], dtype=np.float64)
         log_returns = np.diff(np.log(np.maximum(closes, 1e-8)))
         realized_vol = float(np.std(log_returns)) if len(log_returns) > 2 else 0.01
@@ -151,16 +159,17 @@ async def ai_analyze(
             forecast_upper=forecast_upper,
             realized_volatility=realized_vol,
             sentiment_score=forecast.sentiment_score,
-            fear_greed_index=50.0,  # will be enriched by sentiment scorer if available
+            funding_rate=funding_rate,
+            fear_greed_index=fear_greed_index,
             timeframe=timeframe,
             risk_profile=payload.risk_profile,
             language=payload.language,
         )
 
-        # --- Step 4: Stream CrewAI pipeline via SSE ---
-        logger.info("Starting SSE streaming AI analysis for %s @ %s", symbol, timeframe)
+        # --- Step 5: Stream LangGraph debate council via SSE ---
+        logger.info("Starting LangGraph AI council debate for %s @ %s", symbol, timeframe)
         return StreamingResponse(
-            run_trading_crew_streaming(market_context),
+            run_graph_council_streaming(market_context),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",

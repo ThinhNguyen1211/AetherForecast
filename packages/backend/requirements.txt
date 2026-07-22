@@ -24,4 +24,5 @@ protobuf==5.29.5
 numpy==2.2.6
 crewai>=0.28.0
 langchain-openai>=0.3.0
+langgraph>=0.2.0
 slowapi>=0.1.9

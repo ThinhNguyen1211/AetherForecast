@@ -1457,8 +1457,8 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="cosmic-shell flex h-screen flex-col overflow-hidden p-3 lg:p-4">
-      <div className="mx-auto flex w-full max-w-[1880px] flex-1 flex-col gap-4">
+    <div className="cosmic-shell fixed inset-0 flex flex-col overflow-hidden p-3 lg:p-4">
+      <div className="mx-auto flex h-full w-full max-w-[1880px] flex-col gap-4">
         <TopBar
           symbolSearch={searchQuery}
           onSymbolSearchChange={setSearchQuery}
@@ -1481,8 +1481,8 @@ export default function Dashboard() {
           </div>
         )}
 
-        <div className="grid flex-1 min-h-0 gap-4 lg:grid-cols-[280px_minmax(0,1fr)_360px] lg:items-stretch">
-          <div className="flex h-full min-h-0 flex-col overflow-hidden">
+        <div className="grid h-[calc(100vh-80px)] gap-4 lg:grid-cols-[280px_minmax(0,1fr)_360px] lg:items-stretch">
+          <div className="flex h-full flex-col overflow-y-auto scrollbar-slim">
             <Sidebar
               symbols={filteredSymbols}
               selectedSymbol={symbol}
@@ -1540,7 +1540,7 @@ export default function Dashboard() {
             />
           </section>
 
-          <div className="flex h-full min-h-0 flex-col overflow-y-auto scrollbar-slim">
+          <div className="flex h-full flex-col overflow-y-auto scrollbar-slim">
             <PredictionPanel
               symbol={symbol}
               timeframe={timeframe}
