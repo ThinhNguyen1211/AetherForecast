@@ -1493,7 +1493,7 @@ export default function Dashboard() {
             />
           </div>
 
-          <section className="glass-panel flex h-full min-w-0 flex-col overflow-y-auto scrollbar-slim rounded-2xl p-3 lg:p-4">
+          <section className="glass-panel flex h-full min-h-0 min-w-0 flex-col overflow-y-auto scrollbar-slim rounded-2xl p-3 lg:p-4">
             <div className="mb-3 flex items-center justify-between gap-4 rounded-lg border border-violet-400/20 bg-cosmic-900/45 px-3 py-2">
               <div>
                 <p className="muted-label">{t("dashboard.chart")}</p>

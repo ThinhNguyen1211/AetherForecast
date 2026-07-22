@@ -1,8 +1,11 @@
-"""POST /api/ai/analyze — CrewAI multi-agent trading analysis (SSE streaming).
+"""POST /api/ai/analyze — LangGraph cyclic AI Council debate (SSE streaming).
 
 Pulls latest candles + Chronos-2 forecast + sentiment for the given symbol,
-then runs the 3-agent CrewAI pipeline (Quant → Risk → Judge).
-Streams agent thoughts in real-time via Server-Sent Events.
+then runs the 4-agent LangGraph debate pipeline:
+    Quant Analyst → Devil's Advocate → Risk Manager → Execution Judge.
+The Devil's Advocate can force the Quant Analyst to re-evaluate if severe
+contradictions are found (capped to prevent infinite loops).
+Streams agent thoughts and debate logs in real-time via Server-Sent Events.
 Final event contains [FINAL_RESULT]:<AiCouncilDecision JSON>.
 Rate limited to 5 requests per hour per IP.
 """
@@ -83,12 +86,12 @@ async def ai_analyze(
     inference_service: ForecastInferenceService = Depends(get_inference_service),
     s3_client: S3ParquetClient = Depends(get_s3_parquet_client),
 ) -> StreamingResponse:
-    """Run CrewAI 3-agent council on the current market state for a symbol.
+    """Run the LangGraph 4-agent cyclic council on the current market state.
 
-    Returns Server-Sent Events stream with agent reasoning in real-time.
-    Any exception before or during streaming is converted into an SSE error
-    event so the browser receives CORS headers and the real error message
-    instead of a bare 500 response.
+    Returns Server-Sent Events stream with agent reasoning, Devil's Advocate
+    debate logs, and the final decision in real-time. Any exception before or
+    during streaming is converted into an SSE error event so the browser
+    receives CORS headers and the real error message instead of a bare 500.
     """
     symbol = payload.symbol.upper().strip()
     timeframe = payload.timeframe or "1h"

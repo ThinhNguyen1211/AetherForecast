@@ -1,11 +1,11 @@
 """CrewAI Multi-Agent Trading Decision System (Streaming).
 
-3 agents: Quant Analyst, Risk Manager, Execution Judge.
+4 agents: Quant Analyst, Devil's Advocate, Risk Manager, Execution Judge.
 Input: market JSON (price, forecast, volatility, sentiment).
 Output: AiCouncilDecision Pydantic schema (LONG/SHORT/HOLD + entry/SL/TP/leverage/reasoning).
 LLM: DeepSeek via langchain-openai (OpenAI-compatible). Hybrid routing:
-  - Quant Analyst & Risk Manager → deepseek-chat (speed/cost)
-  - Execution Judge → deepseek-reasoner (deep logic)
+  - Quant Analyst, Devil's Advocate & Risk Manager → deepseek-chat (speed/cost)
+  - Execution Judge → deepseek-reasoner (deep logic/reasoning)
 Configurable via DEEPSEEK_API_KEY env.
 
 Supports streaming via `run_trading_crew_streaming()` which yields SSE events
@@ -48,22 +48,22 @@ class AiCouncilDecision(BaseModel):
 
     action: TradeAction = Field(description="LONG, SHORT, or HOLD")
     confidence: float = Field(ge=0.0, le=1.0, description="Confidence score [0,1]")
-    entry: float = Field(description="Suggested entry price (0 if HOLD)")
+    entry: float = Field(default=0.0, description="Suggested entry price (0 if HOLD)")
     entry_condition: str = Field(
         default="Market Order",
         description="How to enter, e.g. 'Market Order' or 'Wait for 1H close above X'",
     )
-    leverage: int = Field(ge=0, le=125, description="Leverage multiplier (0 if HOLD, 1 = spot)")
+    leverage: int = Field(ge=0, le=125, default=0, description="Leverage multiplier (0 if HOLD, 1 = spot)")
     position_size_pct: float = Field(
-        ge=0.0, le=100.0, description="Position size as percent of portfolio (e.g. 2.0 = 2%)"
+        ge=0.0, le=100.0, default=0.0, description="Position size as percent of portfolio (e.g. 2.0 = 2%)"
     )
-    stop_loss: float = Field(description="Stop-loss price (0 if HOLD)")
+    stop_loss: float = Field(default=0.0, description="Stop-loss price (0 if HOLD)")
     invalidation_point: str = Field(
         default="",
         description="Macro/technical condition that invalidates the trade, e.g. 'Close if DXY breaks 106'",
     )
-    take_profit_1: float = Field(description="Safe take-profit for 50% of position (0 if HOLD)")
-    take_profit_2: float = Field(description="Aggressive take-profit for remaining 50% (0 if HOLD)")
+    take_profit_1: float = Field(default=0.0, description="Safe take-profit for 50% of position (0 if HOLD)")
+    take_profit_2: float = Field(default=0.0, description="Aggressive take-profit for remaining 50% (0 if HOLD)")
     reasoning: str = Field(description="Concise human-readable rationale")
 
 
@@ -125,7 +125,7 @@ def _normalize_deepseek_model(model: str) -> str:
 def _build_chat_llm() -> Any:
     """Build DeepSeek-Chat LLM (fast/cost-optimized).
 
-    Used by Quant Analyst & Risk Manager.
+    Used by Quant Analyst, Devil's Advocate, and Risk Manager.
     """
     api_key = _get_deepseek_api_key()
     model = _normalize_deepseek_model(
@@ -175,6 +175,27 @@ def _quant_analyst_agent(llm: Any) -> Any:
             "You are a senior quantitative analyst at a top crypto hedge fund. "
             "You specialize in statistical forecasting models and technical analysis. "
             "You are precise, data-driven, and never guess."
+        ),
+        llm=llm,
+        verbose=False,
+        allow_delegation=False,
+    )
+
+
+def _devils_advocate_agent(llm: Any) -> Any:
+    """Contrarian analyst that attacks the Quant Analyst's signal to fight confirmation bias."""
+    return Agent(
+        role="Devil's Advocate",
+        goal=(
+            "Ruthlessly attack the Quant Analyst's directional signal. Find the strongest "
+            "technical, macro, and contextual reasons why the proposed trade will fail. "
+            "Expose confirmation bias, flawed assumptions, and hidden risks."
+        ),
+        backstory=(
+            "You are a legendary short-seller and risk analyst. Your sole purpose is to "
+            "challenge bullish or bearish narratives. You are cynical, evidence-driven, and "
+            "never accept face-value arguments. You pride yourself on spotting the one reason "
+            "a trade will blow up."
         ),
         llm=llm,
         verbose=False,
@@ -239,11 +260,12 @@ def _execution_judge_agent(llm: Any) -> Any:
 
 def _build_tasks(
     quant: Any,
+    devil: Any,
     risk: Any,
     judge: Any,
     market: MarketContext,
 ) -> list[Any]:
-    """Create the 3-step task pipeline."""
+    """Create the 4-step task pipeline: Quant -> Devil -> Risk -> Judge."""
     market_json = market.model_dump_json(indent=2)
     risk_profile = market.risk_profile
 
@@ -270,16 +292,37 @@ def _build_tasks(
         agent=quant,
     )
 
+    devils_advocate_task = Task(
+        description=(
+            "You are the Devil's Advocate. Review the Quant Analyst's signal and "
+            "ruthlessly attack it. Your job is to find the strongest reasons the trade will fail.\n\n"
+            "Provide:\n"
+            "1. The strongest 2-3 technical or macro reasons the Quant's signal is wrong\n"
+            "2. Any hidden risks not obvious in the forecast bands or sentiment\n"
+            "3. Conditions under which the trade idea would be invalidated\n"
+            "4. A final verdict: weak signal / strong contradiction / needs more confirmation\n"
+            "5. Brief contrarian reasoning (2-3 sentences)\n\n"
+            "Be skeptical and evidence-driven, not contrarian for its own sake."
+        ),
+        expected_output=(
+            "JSON with keys: contradictions (list), hidden_risks (list), invalidation_conditions, "
+            "verdict (weak_signal/strong_contradiction/needs_confirmation), reasoning"
+        ),
+        agent=devil,
+        context=[quant_task],
+    )
+
     risk_task = Task(
         description=(
-            "Review the Quant Analyst's trade proposal against risk factors. "
-            f"The trader's risk profile is {risk_profile.value}.\n\n"
+            "Review the Quant Analyst's trade proposal AND the Devil's Advocate critique "
+            f"against risk factors. The trader's risk profile is {risk_profile.value}.\n\n"
             f"Market context:\n```json\n{market_json}\n```\n\n"
             "Evaluate:\n"
             "1. Sentiment score: extreme values (> 0.7 or < -0.7) signal caution\n"
             "2. Funding rate: high positive = crowded longs, high negative = crowded shorts\n"
             "3. Fear/Greed Index: extreme fear (< 20) or extreme greed (> 80) = caution\n"
-            "4. Realized volatility: high vol = reduce leverage / position size\n\n"
+            "4. Realized volatility: high vol = reduce leverage / position size\n"
+            "5. Devil's Advocate contradictions: if strong, veto or reduce aggressively\n\n"
             "STRICT LEVERAGE BOUNDS:\n"
             "- CONSERVATIVE: leverage must be 2x-10x\n"
             "- BALANCED: leverage must be 11x-40x\n"
@@ -292,12 +335,13 @@ def _build_tasks(
             "position_size_pct, invalidation_point, take_profit_1, take_profit_2, reasoning"
         ),
         agent=risk,
-        context=[quant_task],
+        context=[quant_task, devils_advocate_task],
     )
 
     judge_task = Task(
         description=(
-            "You have the Quant Analyst's signal and the Risk Manager's assessment. "
+            "You have the Quant Analyst's signal, the Devil's Advocate critique, "
+            "and the Risk Manager's assessment. "
             f"The trader's risk profile is {risk_profile.value}. "
             "Make the final pro-trader trade decision.\n\n"
             "Output EXACTLY this JSON structure (no markdown, no explanation outside JSON):\n"
@@ -315,20 +359,28 @@ def _build_tasks(
             '  "reasoning": "<concise string>"\n'
             "}\n\n"
             "Rules:\n"
-            "- If Risk Manager vetoed, action MUST be HOLD with entry/SL/TPs = 0\n"
+            "- If Risk Manager vetoed, action MUST be HOLD with entry/SL/TPs/leverage = 0\n"
+            "- If the Devil's Advocate raised strong contradictions and Risk Manager did not veto, "
+            "  consider HOLD or reduce leverage/confidence accordingly\n"
             "- If reduced, apply the Risk Manager's leverage and stop-loss adjustments\n"
             "- Leverage MUST respect the risk profile bounds\n"
-            "- Confidence reflects your conviction after both analyses\n"
+            "- CRITICAL: If action is HOLD, all price targets (entry, stop_loss, take_profit_1, take_profit_2) "
+            "  MUST be 0.0, BUT the 'confidence' score must be calculated dynamically based on agent "
+            "  consensus. If all agents strongly agree the market is untradable, output high confidence "
+            "  (0.80-0.99). If there is mixed sentiment but HOLD wins out of caution, output lower "
+            "  confidence (0.50-0.70). DO NOT hardcode a specific number and DO NOT output confidence = 0.0 "
+            "  for a HOLD decision.\n"
+            "- Confidence reflects your conviction after weighing Quant + Devil's Advocate + Risk Manager\n"
             "- Reasoning should be 1-2 sentences max\n"
             f"- The final 'reasoning' field in the JSON MUST be written in {market.language} "
             "(if 'vi' use Vietnamese, if 'en' use English). All other keys and processes remain in English."
         ),
         expected_output="A single valid JSON object matching the AiCouncilDecision schema.",
         agent=judge,
-        context=[quant_task, risk_task],
+        context=[quant_task, devils_advocate_task, risk_task],
     )
 
-    return [quant_task, risk_task, judge_task]
+    return [quant_task, devils_advocate_task, risk_task, judge_task]
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +405,7 @@ def _parse_trade_decision(raw_output: str) -> AiCouncilDecision:
             confidence=0.0,
             entry=0.0,
             entry_condition="",
-            leverage=1,
+            leverage=0,
             position_size_pct=0.0,
             stop_loss=0.0,
             invalidation_point="",
@@ -369,6 +421,7 @@ def _parse_trade_decision(raw_output: str) -> AiCouncilDecision:
 
 _AGENT_LABELS = {
     "Quant Analyst": "📊 Quant Analyst",
+    "Devil's Advocate": "😈 Devil's Advocate",
     "Risk Manager": "🛡️ Risk Manager",
     "Execution Judge": "⚖️ Execution Judge",
 }
@@ -438,15 +491,17 @@ def run_trading_crew_streaming(
 
             # --- Phase 2: Agent & Task Construction ---
             quant = _quant_analyst_agent(chat_llm)
+            devil = _devils_advocate_agent(chat_llm)
             risk = _risk_manager_agent(chat_llm, market.risk_profile)
             judge = _execution_judge_agent(reasoner_llm)
-            tasks = _build_tasks(quant, risk, judge, market)
+            tasks = _build_tasks(quant, devil, risk, judge, market)
 
             event_queue.put("📊 Quant Analyst is analyzing market data...")
+            event_queue.put("😈 Devil's Advocate is stress-testing the signal...")
             event_queue.put("🛡️ Risk Manager and ⚖️ Execution Judge standing by...")
 
             crew = Crew(
-                agents=[quant, risk, judge],
+                agents=[quant, devil, risk, judge],
                 tasks=tasks,
                 process=Process.sequential,
                 verbose=False,
@@ -552,13 +607,14 @@ def run_trading_crew(market: MarketContext) -> AiCouncilDecision:
     reasoner_llm = _build_reasoner_llm()
 
     quant = _quant_analyst_agent(chat_llm)
+    devil = _devils_advocate_agent(chat_llm)
     risk = _risk_manager_agent(chat_llm, market.risk_profile)
     judge = _execution_judge_agent(reasoner_llm)
 
-    tasks = _build_tasks(quant, risk, judge, market)
+    tasks = _build_tasks(quant, devil, risk, judge, market)
 
     crew = Crew(
-        agents=[quant, risk, judge],
+        agents=[quant, devil, risk, judge],
         tasks=tasks,
         process=Process.sequential,
         verbose=False,

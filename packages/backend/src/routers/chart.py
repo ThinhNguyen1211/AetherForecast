@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.core.config import get_settings
 from src.dependencies.cognito import require_authenticated_user
-from src.ml.schemas import Candle, ChartResponse, SupportedTimeframe
+from src.ml.schemas import Candle, ChartResponse, SupportedTimeframe, normalize_and_validate_symbol
 
 router = APIRouter(tags=["chart"])
 logger = logging.getLogger(__name__)
@@ -20,12 +20,17 @@ async def get_chart(
     from_timestamp: datetime | None = Query(default=None),
     _claims: dict = Depends(require_authenticated_user),
 ) -> ChartResponse:
+    try:
+        symbol = normalize_and_validate_symbol(symbol)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
     settings = get_settings()
     # Binance limit max is 1000
     capped_limit = min(limit, 1000)
 
     params: dict[str, str | int] = {
-        "symbol": symbol.upper(),
+        "symbol": symbol,
         "interval": timeframe,
         "limit": capped_limit,
     }
