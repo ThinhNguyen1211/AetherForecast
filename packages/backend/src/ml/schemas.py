@@ -1,9 +1,22 @@
+import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 SupportedTimeframe = Literal["1m", "5m", "15m", "1h", "4h", "1d", "1w"]
+
+# Matches the whitelist already enforced on the realtime WebSocket route
+# (src/routers/realtime.py) — normalize (upper + strip) before matching,
+# so lowercase input from callers is accepted, not rejected.
+SYMBOL_REGEX = re.compile(r"^[A-Z0-9]{2,20}$")
+
+
+def normalize_and_validate_symbol(value: str) -> str:
+    normalized = value.upper().strip()
+    if not SYMBOL_REGEX.match(normalized):
+        raise ValueError("symbol must be 2-20 alphanumeric characters (e.g. BTCUSDT)")
+    return normalized
 
 
 class Candle(BaseModel):
@@ -17,6 +30,12 @@ class Candle(BaseModel):
 
 class PredictRequest(BaseModel):
     symbol: str = Field(min_length=2, max_length=20)
+
+    @field_validator("symbol")
+    @classmethod
+    def _validate_symbol(cls, value: str) -> str:
+        return normalize_and_validate_symbol(value)
+
     timeframe: SupportedTimeframe = "1h"
     latest_candles: list[Candle] = Field(min_length=10, max_length=5000)
     sentiment_score: float | None = Field(default=None, ge=-1.0, le=1.0)
