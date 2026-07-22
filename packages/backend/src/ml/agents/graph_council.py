@@ -8,6 +8,7 @@ explicit iteration_count cap.
 
 import json
 import logging
+import re
 import threading
 import traceback
 from collections.abc import Generator
@@ -54,13 +55,31 @@ class AiCouncilState(TypedDict):
 # Helpers
 # ---------------------------------------------------------------------------
 
+_MARKDOWN_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.IGNORECASE | re.DOTALL)
+
+
+def extract_json_from_markdown(raw: str) -> str:
+    """Strip a ```json ... ``` / ``` ... ``` markdown code fence from LLM output.
+
+    DeepSeek (and other chat models) frequently wrap JSON responses in a
+    markdown code fence despite prompt instructions not to. json.loads() fails
+    immediately on the leading backticks (`Expecting value: line 1 column 1`).
+    If no fence is present, the input is returned unchanged (stripped).
+    """
+    match = _MARKDOWN_FENCE_RE.search(raw)
+    if match:
+        return match.group(1).strip()
+    return raw.strip()
+
+
 def _parse_agent_json(raw: str) -> dict[str, Any]:
-    """Extract the first JSON object from agent output."""
-    json_start = raw.find("{")
-    json_end = raw.rfind("}") + 1
+    """Extract a JSON object from agent output, tolerating markdown code fences."""
+    cleaned = extract_json_from_markdown(raw)
+    json_start = cleaned.find("{")
+    json_end = cleaned.rfind("}") + 1
     if json_start >= 0 and json_end > json_start:
-        return json.loads(raw[json_start:json_end])
-    return json.loads(raw)
+        return json.loads(cleaned[json_start:json_end])
+    return json.loads(cleaned)
 
 
 def _market_context_from_state(state: AiCouncilState) -> MarketContext:
@@ -174,15 +193,26 @@ def devils_advocate_node(state: AiCouncilState) -> dict[str, Any]:
         "3. Conditions under which the trade idea would be invalidated\n"
         "4. A final verdict: weak_signal / strong_contradiction / needs_confirmation\n"
         "5. Brief contrarian reasoning (2-3 sentences)\n\n"
-        "Be skeptical and evidence-driven, not contrarian for its own sake."
+        "Be skeptical and evidence-driven, not contrarian for its own sake.\n\n"
+        "CRITICAL OUTPUT FORMAT: Respond with ONE raw JSON object and NOTHING else. "
+        "Do NOT wrap it in a markdown code fence (no ```json or ```). Do NOT include any "
+        "explanation, heading, or text before or after the JSON. Output EXACTLY this shape:\n"
+        "{\n"
+        '  "contradictions": ["<reason 1>", "<reason 2>"],\n'
+        '  "hidden_risks": ["<risk 1>"],\n'
+        '  "invalidation_conditions": "<condition>",\n'
+        '  "verdict": "weak_signal" | "strong_contradiction" | "needs_confirmation",\n'
+        '  "reasoning": "<2-3 sentences>"\n'
+        "}"
     )
 
     agent = _devils_advocate_agent(_build_chat_llm())
     task = Task(
         description=prompt,
         expected_output=(
-            "JSON with keys: contradictions (list), hidden_risks (list), "
-            "invalidation_conditions, verdict (weak_signal/strong_contradiction/needs_confirmation), reasoning"
+            "A single raw JSON object (no markdown fence) with keys: contradictions (list), "
+            "hidden_risks (list), invalidation_conditions, "
+            "verdict (weak_signal/strong_contradiction/needs_confirmation), reasoning"
         ),
         agent=agent,
     )
@@ -191,13 +221,26 @@ def devils_advocate_node(state: AiCouncilState) -> dict[str, Any]:
     try:
         devil_critique = _parse_agent_json(raw)
     except (json.JSONDecodeError, ValueError) as exc:
-        logger.warning("Devil's Advocate output parse failed: %s | raw: %s", exc, raw[:500])
+        # An unparsable critique is NOT evidence that the Quant signal is sound —
+        # silently defaulting to "needs_confirmation" would swallow the failure and
+        # let a potentially-bad trade sail through to the Risk Manager unchallenged.
+        # Force a retry by routing back to the Quant Analyst instead (route_after_devil
+        # treats "strong_contradiction" as the trigger, capped by MAX_DEBATE_ITERATIONS).
+        logger.critical(
+            "Devil's Advocate JSON parse failed even after markdown-fence stripping: %s | raw: %s",
+            exc,
+            raw[:500],
+        )
+        _emit_info(
+            state,
+            "⚠️ Devil's Advocate output could not be parsed — forcing a re-evaluation as a precaution",
+        )
         devil_critique = {
             "contradictions": [],
             "hidden_risks": [],
             "invalidation_conditions": "",
-            "verdict": "needs_confirmation",
-            "reasoning": f"Devil's Advocate parse failed: {exc}",
+            "verdict": "strong_contradiction",
+            "reasoning": f"Devil's Advocate output could not be parsed as JSON: {exc}",
         }
 
     return {"devil_critique": devil_critique}

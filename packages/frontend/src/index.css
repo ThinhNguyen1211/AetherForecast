@@ -23,7 +23,6 @@ body {
 }
 
 .cosmic-shell {
-  min-height: 100vh;
   background-image: radial-gradient(900px 480px at 20% -15%, rgba(140, 82, 255, 0.23), transparent 55%),
     radial-gradient(680px 460px at 90% 80%, rgba(0, 255, 255, 0.14), transparent 60%),
     linear-gradient(150deg, #0b0616 0%, #12081f 55%, #1d1035 100%);

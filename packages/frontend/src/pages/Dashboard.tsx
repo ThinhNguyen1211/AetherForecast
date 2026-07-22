@@ -1481,7 +1481,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        <div className="grid flex-1 min-h-0 gap-4 lg:grid-cols-[280px_minmax(0,1fr)_360px] lg:items-stretch">
+        <div className="grid h-full flex-1 min-h-0 gap-4 lg:grid-cols-[280px_minmax(0,1fr)_360px] lg:grid-rows-1 lg:items-stretch">
           <div className="flex h-full min-h-0 flex-col overflow-hidden">
             <Sidebar
               symbols={filteredSymbols}
