@@ -301,8 +301,11 @@ def execution_judge_node(state: AiCouncilState) -> dict[str, Any]:
         "- If reduced, apply the Risk Manager's leverage and stop-loss adjustments\n"
         "- Leverage MUST respect the risk profile bounds\n"
         "- CRITICAL: If action is HOLD, all price targets (entry, stop_loss, take_profit_1, take_profit_2) "
-        "  MUST be 0.0, BUT the 'confidence' score must reflect your certainty in the HOLD decision "
-        "  (e.g., 0.85). Do NOT output confidence = 0.0 for a HOLD decision.\n"
+        "  MUST be 0.0, BUT the 'confidence' score must be calculated dynamically based on agent "
+        "  consensus. If all agents strongly agree the market is untradable, output high confidence "
+        "  (0.80-0.99). If there is mixed sentiment but HOLD wins out of caution, output lower "
+        "  confidence (0.50-0.70). DO NOT hardcode a specific number and DO NOT output confidence = 0.0 "
+        "  for a HOLD decision.\n"
         "- Confidence reflects your conviction after weighing Quant + Devil's Advocate + Risk Manager\n"
         "- Reasoning should be 1-2 sentences max\n"
         f"- The final 'reasoning' field in the JSON MUST be written in {market.language} "
@@ -428,6 +431,16 @@ def run_ai_council_graph(market: MarketContext) -> AiCouncilDecision:
     return AiCouncilDecision(**final_state["final_decision"])
 
 
+# Maps each graph node name to the terminal label used by the frontend
+# (AiCouncilPanel's AGENT_COLORS) and the state key holding its parsed JSON output.
+_NODE_LABELS: dict[str, tuple[str, str]] = {
+    "quant_analyst": ("📊 Quant Analyst", "quant_signal"),
+    "devils_advocate": ("😈 Devil's Advocate", "devil_critique"),
+    "risk_manager": ("🛡️ Risk Manager", "risk_assessment"),
+    "execution_judge": ("⚖️ Execution Judge", "final_decision"),
+}
+
+
 def run_ai_council_graph_streaming(
     market: MarketContext,
 ) -> Generator[str, None, None]:
@@ -443,7 +456,13 @@ def run_ai_council_graph_streaming(
     sentinel = object()
 
     def _run_council() -> None:
-        """Background worker: runs the blocking LangGraph pipeline."""
+        """Background worker: runs the blocking LangGraph pipeline.
+
+        Uses graph.stream(..., stream_mode="updates") instead of invoke() so that
+        each node's parsed JSON output can be pushed to the event queue as soon as
+        that node completes, giving the frontend terminal the full agent payloads
+        (not just short [INFO] narration) in real time.
+        """
         try:
             graph = build_ai_council_graph()
             initial_state: AiCouncilState = {
@@ -455,8 +474,23 @@ def run_ai_council_graph_streaming(
                 "iteration_count": 0,
                 "event_queue": event_queue,
             }
-            final_state = graph.invoke(initial_state)
-            decision = AiCouncilDecision(**final_state["final_decision"])
+
+            accumulated_state: dict[str, Any] = dict(initial_state)
+            for step in graph.stream(initial_state, stream_mode="updates"):
+                for node_name, update in step.items():
+                    accumulated_state.update(update)
+
+                    label_and_key = _NODE_LABELS.get(node_name)
+                    if label_and_key is None:
+                        continue
+                    label, state_key = label_and_key
+                    payload = update.get(state_key)
+                    if not payload:
+                        continue
+                    payload_json = json.dumps(payload, indent=2, ensure_ascii=False)
+                    event_queue.put(f"[{label}] completed analysis:\n{payload_json}")
+
+            decision = AiCouncilDecision(**accumulated_state["final_decision"])
             compact_json = json.dumps(decision.model_dump(), separators=(",", ":"))
             event_queue.put(f"[FINAL_RESULT]:{compact_json}")
         except Exception as exc:
