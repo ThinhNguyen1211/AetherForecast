@@ -73,14 +73,15 @@ export default function PredictionPanel({
   const isUp = (deltaPct ?? 0) >= 0;
 
   return (
-    <section className="glass-panel scrollbar-slim flex h-full min-h-0 flex-col overflow-y-auto rounded-2xl p-4">
+    <section className="glass-panel flex h-full flex-col overflow-hidden rounded-2xl p-4">
       <div>
         <p className="muted-label">{t("predictionPanel.title")}</p>
         <h2 className="mt-1 text-xl font-semibold text-violet-100">{t("predictionPanel.forecastTitle", { symbol })}</h2>
         <p className="mt-1 text-xs text-violet-200/75">{t("predictionPanel.subtitle")}</p>
       </div>
 
-      <div className="mt-4 rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-3">
+      <div className="scrollbar-slim mt-3 flex-1 overflow-y-auto pr-1">
+        <div className="rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-3">
         <p className="muted-label">{t("predictionPanel.forecastHorizon")}</p>
         <div className="mt-2 grid grid-cols-2 gap-2">
           {horizonOptions.map((option) => (
@@ -205,7 +206,7 @@ export default function PredictionPanel({
             : t("predictionPanel.externalSentimentPlaceholder")}
         </p>
       </div>
-
+      </div>
 
     </section>
   );

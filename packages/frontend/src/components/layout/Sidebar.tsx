@@ -20,7 +20,7 @@ export default function Sidebar({
   const { t } = useTranslation();
 
   return (
-    <aside className="glass-panel flex h-full min-h-0 flex-col rounded-2xl p-3">
+    <aside className="glass-panel flex h-full flex-col overflow-hidden rounded-2xl p-3">
       <div>
         <p className="muted-label">{t("sidebar.markets")}</p>
         <input
@@ -31,7 +31,7 @@ export default function Sidebar({
         />
       </div>
 
-      <div className="scrollbar-slim mt-3 min-h-0 flex-1 overflow-y-auto rounded-lg border border-violet-400/20 bg-cosmic-900/50">
+      <div className="scrollbar-slim mt-3 flex-1 overflow-y-auto rounded-lg border border-violet-400/20 bg-cosmic-900/50">
         {loading ? (
           <p className="px-3 py-4 text-sm text-violet-200/75">{t("sidebar.loadingSymbols")}</p>
         ) : symbols.length === 0 ? (
