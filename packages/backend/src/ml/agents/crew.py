@@ -267,11 +267,8 @@ def _execution_judge_agent(llm: Any) -> Any:
             "completely illogical to output a low confidence score for a HOLD action when all evidence "
             "points to staying out of the market. Be highly confident in your decision to preserve capital. "
             "Do NOT fixate on any specific numeric threshold; calibrate the score based on the strength "
-            "of consensus to hold."
-            "CRITICAL LANGUAGE RULE: You MUST output your reasoning, analysis, and all JSON values "
-            "strictly in ENGLISH. Do NOT translate professional trading terminology (e.g., Long, "
-            "Short, Breakout, Stop-Loss, Take-Profit, Volatility, Range-bound) into Vietnamese or "
-            "any other language. The final 'reasoning' field must be in English."
+            "of consensus to hold. The requested output language and terminology rules for the "
+            "'reasoning' and 'entry_condition' fields are specified per-request in the task prompt."
         ),
         llm=llm,
         verbose=False,
@@ -397,10 +394,12 @@ def _build_tasks(
             "  completely illogical to output a low confidence score for a HOLD action when all evidence "
             "  points to staying out of the market. Be highly confident in your decision to preserve capital.\n"
             "- Reasoning should be 1-2 sentences max\n"
-            "- CRITICAL LANGUAGE RULE: The final 'reasoning' field in the JSON, your analysis, and "
-            "  all JSON values MUST be in ENGLISH. Do NOT translate professional trading terminology "
-            "  (e.g., Long, Short, Breakout, Stop-Loss, Take-Profit, Volatility, Range-bound) into "
-            "  Vietnamese or any other language."
+            f"- CRITICAL LOCALIZATION RULE: The user has requested the output in the '{market.language}' "
+            "language ('vi' for Vietnamese, 'en' for English). You MUST write the 'reasoning' and "
+            "'entry_condition' fields in this requested language. However, to maintain professional "
+            "financial tone, you MUST NOT translate trading terminology. Keep words like LONG, SHORT, "
+            "Take-Profit, Stop-Loss, Breakout, Limit Order, Market Order, Volatility strictly in "
+            "English, even if the rest of the sentence is in the requested language."
         ),
         expected_output="A single valid JSON object matching the AiCouncilDecision schema.",
         agent=judge,

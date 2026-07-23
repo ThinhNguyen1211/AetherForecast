@@ -237,7 +237,7 @@ def execution_judge_node(state: CouncilState) -> CouncilState:
         '  "invalidation_point": "<macro/technical invalidation>",\n'
         '  "take_profit_1": <float>,\n'
         '  "take_profit_2": <float>,\n'
-        '  "reasoning": "<concise string in English>"\n'
+        '  "reasoning": "<concise string in the requested language>"\n'
         "}\n\n"
         "Rules:\n"
         "- If Risk Manager vetoed, action MUST be HOLD with entry/SL/TPs = 0\n"
@@ -245,10 +245,12 @@ def execution_judge_node(state: CouncilState) -> CouncilState:
         "- Leverage MUST respect the risk profile bounds\n"
         "- Confidence reflects your conviction after both analyses\n"
         "- Reasoning should be 1-2 sentences max\n"
-        "- CRITICAL LANGUAGE RULE: The final 'reasoning' field in the JSON, your analysis, and "
-        "  all JSON values MUST be in ENGLISH. Do NOT translate professional trading terminology "
-        "  (e.g., Long, Short, Breakout, Stop-Loss, Take-Profit, Volatility, Range-bound) into "
-        "  Vietnamese or any other language."
+        f"- CRITICAL LOCALIZATION RULE: The user has requested the output in the '{market.language}' "
+        "language ('vi' for Vietnamese, 'en' for English). You MUST write the 'reasoning' and "
+        "'entry_condition' fields in this requested language. However, to maintain professional "
+        "financial tone, you MUST NOT translate trading terminology. Keep words like LONG, SHORT, "
+        "Take-Profit, Stop-Loss, Breakout, Limit Order, Market Order, Volatility strictly in "
+        "English, even if the rest of the sentence is in the requested language."
     )
 
     llm = _build_reasoner_llm()
