@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { PredictResponse, Timeframe } from "@/services/api";
+import { PredictResponse, RiskProfile, Timeframe } from "@/services/api";
 import { PredictionStageDefinition, PredictionStageProgress } from "@/types/predictionProgress";
 import AiCouncilPanel from "@/components/layout/AiCouncilPanel";
 
@@ -8,6 +9,16 @@ interface HorizonOption {
   label: string;
   hours: number;
 }
+
+const RISK_PROFILE_VALUES: RiskProfile[] = ["CONSERVATIVE", "BALANCED", "DEGEN"];
+
+// Backend enum has no "AGGRESSIVE" value — DEGEN is the highest-leverage tier,
+// surfaced to users as "Aggressive".
+const RISK_PROFILE_LABEL_KEYS: Record<RiskProfile, string> = {
+  CONSERVATIVE: "predictionPanel.riskProfile.conservative",
+  BALANCED: "predictionPanel.riskProfile.balanced",
+  DEGEN: "predictionPanel.riskProfile.aggressive",
+};
 
 interface PredictionPanelProps {
   symbol: string;
@@ -46,6 +57,7 @@ export default function PredictionPanel({
   onPredict,
 }: PredictionPanelProps) {
   const { t } = useTranslation();
+  const [riskProfile, setRiskProfile] = useState<RiskProfile>("BALANCED");
   const horizonTargetPrice =
     prediction?.prediction_array[prediction.prediction_array.length - 1] ?? prediction?.predicted_price ?? null;
 
@@ -109,6 +121,27 @@ export default function PredictionPanel({
         </p>
       </div>
 
+      <div className="mt-3 rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-3">
+        <p className="muted-label">{t("predictionPanel.riskProfile.title")}</p>
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          {RISK_PROFILE_VALUES.map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setRiskProfile(value)}
+              className={`rounded-lg border px-2 py-2 text-xs font-semibold transition ${
+                riskProfile === value
+                  ? "border-cyan-300/80 bg-cyan-400/15 text-cyan-100"
+                  : "border-violet-400/35 bg-cosmic-900/70 text-violet-200 hover:border-violet-300/60"
+              }`}
+            >
+              {t(RISK_PROFILE_LABEL_KEYS[value])}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-violet-200/75">{t("predictionPanel.riskProfile.hint")}</p>
+      </div>
+
       <button
         type="button"
         onClick={onPredict}
@@ -123,7 +156,7 @@ export default function PredictionPanel({
       </button>
 
       <div className="mb-3">
-        <AiCouncilPanel symbol={symbol} timeframe={timeframe} hasPrediction={prediction !== null} />
+        <AiCouncilPanel symbol={symbol} timeframe={timeframe} hasPrediction={prediction !== null} riskProfile={riskProfile} />
       </div>
 
       {loading && predictionProgress.length > 0 && (

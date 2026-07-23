@@ -83,7 +83,14 @@
     "sentimentSource": "Nguồn: {{source}} ({{timeframe}})",
     "sentimentPlaceholder": "Cảm xúc thị trường được tính tự động từ các nến gần nhất.",
     "externalSentiment": "Bên ngoài: {{score}} ({{source}})",
-    "externalSentimentPlaceholder": "Cảm xúc bên ngoài được lấy từ các nguồn vĩ mô/tin tức/mạng xã hội trực tiếp theo mỗi lần dự đoán."
+    "externalSentimentPlaceholder": "Cảm xúc bên ngoài được lấy từ các nguồn vĩ mô/tin tức/mạng xã hội trực tiếp theo mỗi lần dự đoán.",
+    "riskProfile": {
+      "title": "Mức Độ Rủi Ro",
+      "conservative": "Thận trọng",
+      "balanced": "Cân bằng",
+      "aggressive": "Mạo hiểm",
+      "hint": "Quyết định giới hạn đòn bẩy của Hội đồng AI (2x-10x / 11x-40x / 41x-125x)."
+    }
   },
   "predictionPipeline": {
     "initializingTitle": "Đang khởi tạo pipeline dự đoán",

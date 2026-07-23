@@ -83,7 +83,14 @@
     "sentimentSource": "Source: {{source}} ({{timeframe}})",
     "sentimentPlaceholder": "Sentiment is computed automatically from latest market candles.",
     "externalSentiment": "External: {{score}} ({{source}})",
-    "externalSentimentPlaceholder": "External sentiment is fetched from live macro/news/social feeds per prediction."
+    "externalSentimentPlaceholder": "External sentiment is fetched from live macro/news/social feeds per prediction.",
+    "riskProfile": {
+      "title": "Risk Profile",
+      "conservative": "Conservative",
+      "balanced": "Balanced",
+      "aggressive": "Aggressive",
+      "hint": "Controls the AI Council's leverage bounds (2x-10x / 11x-40x / 41x-125x)."
+    }
   },
   "predictionPipeline": {
     "initializingTitle": "Initializing prediction pipeline",

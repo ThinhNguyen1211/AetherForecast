@@ -559,6 +559,8 @@ export function connectRealtimeKline(
 
 export type TradeAction = "LONG" | "SHORT" | "HOLD";
 
+export type RiskProfile = "CONSERVATIVE" | "BALANCED" | "DEGEN";
+
 export interface AiCouncilDecision {
   action: TradeAction;
   confidence: number;

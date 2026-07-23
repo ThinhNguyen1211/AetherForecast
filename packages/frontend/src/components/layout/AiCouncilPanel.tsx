@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { getAuthToken, Timeframe, TradeAction, AiCouncilDecision } from "@/services/api";
+import { getAuthToken, Timeframe, TradeAction, AiCouncilDecision, RiskProfile } from "@/services/api";
 import logoEye from "@/assets/logo-eye.svg";
 
 interface AiCouncilPanelProps {
   symbol: string;
   timeframe: Timeframe;
   hasPrediction: boolean;
+  riskProfile: RiskProfile;
 }
 
 const ACTION_STYLES: Record<TradeAction, { badge: string; glow: string }> = {
@@ -64,7 +65,7 @@ function TerminalLine({ line, index }: { line: string; index: number }) {
   );
 }
 
-export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiCouncilPanelProps) {
+export default function AiCouncilPanel({ symbol, timeframe, hasPrediction, riskProfile }: AiCouncilPanelProps) {
   const { t, i18n } = useTranslation();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiLogs, setAiLogs] = useState<string[]>([]);
@@ -114,7 +115,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
           Accept: "text/event-stream",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ symbol, timeframe, risk_profile: "BALANCED", language: i18n.language }),
+        body: JSON.stringify({ symbol, timeframe, risk_profile: riskProfile, language: i18n.language }),
         signal: controller.signal,
       });
 
@@ -222,7 +223,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction }: AiC
     } finally {
       setIsAnalyzing(false);
     }
-  }, [symbol, timeframe, isAnalyzing, t]);
+  }, [symbol, timeframe, riskProfile, isAnalyzing, t]);
 
   const style = finalDecision ? ACTION_STYLES[finalDecision.action] : null;
 
