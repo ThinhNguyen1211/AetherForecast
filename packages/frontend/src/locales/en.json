@@ -8,20 +8,20 @@
   },
   "landing": {
     "badge": "AETHERFORECAST",
-    "title": "Cosmic Intelligence For Crypto and Gold Time-Series Forecasting",
-    "description": "Explore a production-grade trading dashboard powered by real market data, realtime stream updates, and machine learning forecasts. Sign in to unlock the full dashboard with live candles, prediction confidence bands, and advanced market signals.",
+    "title": "Real-Time Crypto Advisory Platform with Multi-Agent Architecture",
+    "description": "Execute with AI Council intelligence — low-latency market data, realtime candle streams, and consensus signals from Multi-Agent analysis. Sign in to unlock the trading Terminal with forecast bands, risk profiles, and leverage optimized per setup.",
     "signIn": "Sign in",
     "signUp": "Sign up",
-    "highlightsTitle": "Platform Highlights",
+    "highlightsTitle": "Core Edge",
     "highlights": [
-      "Lightweight charting with MA, RSI, MACD, and forecast overlays",
-      "Realtime WebSocket candle stream with robust reconnect handling",
-      "Hugging Face Chronos forecasting pipeline integrated with sentiment"
+      "Multi-Agent architecture: Quant, Risk, Devil's Advocate and Execution Judge co-deliberate",
+      "Low-latency market data with realtime WebSocket feeds",
+      "Chronos ML forecasting fused with on-chain/macro sentiment"
     ],
-    "protectedNotice": "Protected route is active: dashboard access requires a valid Cognito JWT session."
+    "protectedNotice": "Protected area: Terminal access requires a valid Cognito JWT session."
   },
   "topBar": {
-    "tagline": "Cosmic Trading Dashboard",
+    "tagline": "Crypto Trading Terminal",
     "searchSymbol": "Search Symbol",
     "searchPlaceholder": "BTCUSDT",
     "ticker": "Ticker",
@@ -37,7 +37,7 @@
     "filterPlaceholder": "Filter symbol",
     "loadingSymbols": "Loading symbols...",
     "noSymbols": "No symbols available.",
-    "spot": "spot"
+    "spot": "Spot"
   },
   "dashboard": {
     "chart": "Chart",
@@ -67,9 +67,9 @@
     }
   },
   "predictionPanel": {
-    "title": "Prediction",
+    "title": "Terminal",
     "forecastTitle": "{{symbol}} Forecast",
-    "subtitle": "Horizon controls use hours/days and map to chart timeframe steps.",
+    "subtitle": "Select horizon and risk profile for AI Council to generate a matching signal.",
     "forecastHorizon": "Forecast Horizon",
     "active": "Active: {{horizon}} requested, {{bars}} steps on {{timeframe}}.",
     "generate": "Generate prediction",
@@ -79,7 +79,7 @@
     "confidence": "Confidence",
     "confidenceRange": "{{lower}} - {{upper}} (horizon target)",
     "confidencePlaceholder": "Run a prediction to view confidence interval.",
-    "sentimentScore": "Sentiment Score (Auto)",
+    "sentimentScore": "Sentiment Score",
     "sentimentSource": "Source: {{source}} ({{timeframe}})",
     "sentimentPlaceholder": "Sentiment is computed automatically from latest market candles.",
     "externalSentiment": "External: {{score}} ({{source}})",
@@ -89,7 +89,7 @@
       "conservative": "Conservative",
       "balanced": "Balanced",
       "aggressive": "Aggressive",
-      "hint": "Controls the AI Council's leverage bounds (2x-10x / 11x-40x / 41x-125x)."
+      "hint": "AI Council leverage bounds: 2x-10x / 11x-40x / 41x-125x."
     }
   },
   "predictionPipeline": {
@@ -118,7 +118,7 @@
       },
       "render_output": {
         "title": "Render output to chart",
-        "description": "Draw the prediction line, forecast range, and update the panel."
+        "description": "Draw the prediction line, forecast range, and update panel."
       }
     }
   },
@@ -193,7 +193,7 @@
     }
   },
   "aiCouncil": {
-    "title": "AI AGENT TEAM",
+    "title": "AI COUNCIL",
     "analyzeButton": "Analyze & Generate Signals",
     "analyzing": "Agents are analyzing strategy...",
     "needPrediction": "Run ML Prediction first to unlock this feature.",

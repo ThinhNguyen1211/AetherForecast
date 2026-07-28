@@ -8,23 +8,23 @@
   },
   "landing": {
     "badge": "AETHERFORECAST",
-    "title": "Trí Tuệ Vũ Trụ Cho Dự Báo Chuỗi Thời Gian Crypto và Vàng",
-    "description": "Khám phá bảng điều khiển giao dịch chuẩn production được vận hành bởi dữ liệu thị trường thực, cập nhật luồng thời gian thực và các dự đoán học máy. Đăng nhập để mở khóa toàn bộ dashboard với nến trực tiếp, dải tin cậy dự đoán và tín hiệu thị trường nâng cao.",
+    "title": "Nền tảng Cố vấn Crypto Thời gian thực với Kiến trúc Multi-Agent",
+    "description": "Vận hành lệnh bằng trí tuệ AI Council — dữ liệu thị trường độ trễ thấp, luồng nến realtime và tín hiệu từ Multi-Agent phân tích đồng thuận. Đăng nhập để mở khóa Terminal giao dịch với dải dự báo, mức rủi ro và đòn bẩy được tối ưu theo từng setup.",
     "signIn": "Đăng nhập",
     "signUp": "Đăng ký",
-    "highlightsTitle": "Điểm Nổi Bật Của Nền Tảng",
+    "highlightsTitle": "Lợi thế cốt lõi",
     "highlights": [
-      "Biểu đồ nhẹ với MA, RSI, MACD và lớp phủ dự báo",
-      "Luồng nến WebSocket thời gian thực với khả năng kết nối lại mạnh mẽ",
-      "Pipeline dự báo Hugging Face Chronos tích hợp cùng phân tích cảm xúc"
+      "Kiến trúc Multi-Agent: Quant, Risk, Devil's Advocate và Execution Judge cùng phán quyết",
+      "Dữ liệu thị trường độ trễ thấp, cập nhật qua WebSocket realtime",
+      "Dự báo học máy Chronos kết hợp sentiment on-chain/vĩ mô"
     ],
-    "protectedNotice": "Route bảo vệ đang hoạt động: truy cập dashboard yêu cầu phiên JWT Cognito hợp lệ."
+    "protectedNotice": "Khu vực bảo vệ: truy cập Terminal yêu cầu phiên JWT Cognito hợp lệ."
   },
   "topBar": {
-    "tagline": "Bảng Điều Khiển Giao Dịch Vũ Trụ",
-    "searchSymbol": "Tìm Mã",
+    "tagline": "Crypto Trading Terminal",
+    "searchSymbol": "Tìm mã",
     "searchPlaceholder": "BTCUSDT",
-    "ticker": "Mã",
+    "ticker": "Ticker",
     "toggleLanguage": "Chuyển ngôn ngữ",
     "account": "Tài khoản",
     "loginRegister": "Đăng nhập / Đăng ký",
@@ -37,11 +37,11 @@
     "filterPlaceholder": "Lọc mã",
     "loadingSymbols": "Đang tải danh sách mã...",
     "noSymbols": "Không có mã nào khả dụng.",
-    "spot": "giao ngay"
+    "spot": "Spot"
   },
   "dashboard": {
     "chart": "Biểu đồ",
-    "candlesTitle": "Nến {{symbol}} ({{timeframe}})",
+    "candlesTitle": "Biểu đồ Nến {{symbol}} ({{timeframe}})",
     "loadingRecentCandles": "Đang tải nến gần nhất...",
     "hydratingHistory": "Đang tải thêm lịch sử... ({{count}})",
     "loadingOlderCandles": "Đang tải nến cũ hơn... ({{count}})",
@@ -67,29 +67,29 @@
     }
   },
   "predictionPanel": {
-    "title": "Dự đoán",
+    "title": "Terminal",
     "forecastTitle": "Dự báo {{symbol}}",
-    "subtitle": "Điều khiển khung thời gian dùng giờ/ngày và ánh xạ theo bước khung nến của biểu đồ.",
+    "subtitle": "Chọn khung thời gian và mức độ rủi ro để AI Council tạo tín hiệu phù hợp.",
     "forecastHorizon": "Khung Dự báo",
     "active": "Đang chọn: {{horizon}} yêu cầu, {{bars}} bước trên khung {{timeframe}}.",
     "generate": "Tạo dự đoán",
     "running": "Đang chạy: {{stage}}",
     "pipelineTitle": "Luồng Xử lý Dự đoán",
     "expectedMove": "Biến động dự kiến",
-    "confidence": "Độ tin cậy",
+    "confidence": "Confidence",
     "confidenceRange": "{{lower}} - {{upper}} (mục tiêu theo khung dự báo)",
     "confidencePlaceholder": "Chạy dự đoán để xem khoảng tin cậy.",
-    "sentimentScore": "Điểm Cảm xúc Thị trường (Tự động)",
+    "sentimentScore": "Sentiment Score",
     "sentimentSource": "Nguồn: {{source}} ({{timeframe}})",
-    "sentimentPlaceholder": "Cảm xúc thị trường được tính tự động từ các nến gần nhất.",
-    "externalSentiment": "Bên ngoài: {{score}} ({{source}})",
-    "externalSentimentPlaceholder": "Cảm xúc bên ngoài được lấy từ các nguồn vĩ mô/tin tức/mạng xã hội trực tiếp theo mỗi lần dự đoán.",
+    "sentimentPlaceholder": "Sentiment được tính tự động từ các nến gần nhất.",
+    "externalSentiment": "External: {{score}} ({{source}})",
+    "externalSentimentPlaceholder": "External sentiment được lấy từ các nguồn vĩ mô/tin tức/mạng xã hội trực tiếp theo mỗi lần dự đoán.",
     "riskProfile": {
-      "title": "Mức Độ Rủi Ro",
+      "title": "Mức độ rủi ro",
       "conservative": "Thận trọng",
       "balanced": "Cân bằng",
       "aggressive": "Mạo hiểm",
-      "hint": "Quyết định giới hạn đòn bẩy của Hội đồng AI (2x-10x / 11x-40x / 41x-125x)."
+      "hint": "Giới hạn đòn bẩy AI Council: 2x-10x / 11x-40x / 41x-125x."
     }
   },
   "predictionPipeline": {
@@ -101,8 +101,8 @@
         "description": "Lấy dữ liệu chart mới nhất để tránh dự đoán trên snapshot cũ."
       },
       "fetch_external_context": {
-        "title": "Thu thập ngữ cảnh thị trường",
-        "description": "Chuẩn bị sentiment và bối cảnh ngoài giá trong backend."
+        "title": "Thu thập context thị trường",
+        "description": "Chuẩn bị sentiment và context ngoài giá trong backend."
       },
       "prepare_payload": {
         "title": "Chuẩn hóa dữ liệu đầu vào",
@@ -118,7 +118,7 @@
       },
       "render_output": {
         "title": "Xuất kết quả lên biểu đồ",
-        "description": "Vẽ prediction line, vùng dự báo và cập nhật panel."
+        "description": "Vẽ prediction line, vùng dự báo và update panel."
       }
     }
   },
@@ -130,22 +130,22 @@
     "invalidChartData": "Dữ liệu biểu đồ nhận được chứa timestamp hoặc giá trị OHLCV không hợp lệ. Làm mới lịch sử và kiểm tra định dạng nến từ backend.",
     "loadingOlderCandles": "Đang tải nến cũ hơn...",
     "legend": {
-      "livePrice": "Giá nến trực tiếp (thời gian thực)",
-      "prediction": "Dự đoán (giá đóng trung bình)",
+      "livePrice": "Giá nến realtime",
+      "prediction": "Dự đoán (avg close)",
       "forecastRange": "Khoảng dự báo (cao/thấp)",
-      "clickHint": "Nhấp vào biểu đồ để ghim bảng OHLC, Esc để đóng"
+      "clickHint": "Nhấp biểu đồ để ghim OHLC, Esc để đóng"
     },
     "tooltip": {
       "forecast": "Dự đoán",
       "market": "Thị trường",
-      "open": "Giá mở",
-      "high": "Giá cao",
-      "low": "Giá thấp",
-      "close": "Giá đóng",
+      "open": "Mở",
+      "high": "Cao",
+      "low": "Thấp",
+      "close": "Đóng",
       "change": "Thay đổi",
       "changePct": "% Thay đổi",
       "range": "Biên độ",
-      "volume": "Khối lượng",
+      "volume": "Volume",
       "closeHint": "Nhấn Esc để đóng bảng thông tin."
     },
     "rsi": "RSI (14)",
@@ -187,43 +187,43 @@
     "success": {
       "signedIn": "Đăng nhập thành công.",
       "accountCreatedSignedIn": "Đã tạo tài khoản và đăng nhập thành công.",
-      "verificationSent": "Đã gửi mã xác nhận. Xác nhận tài khoản để tiếp tục.",
+      "verificationSent": "Đã gửi mã xác nhận. Xác nhận tài khoản để tiếp tiếp.",
       "accountConfirmedSignedIn": "Đã xác nhận tài khoản và đăng nhập thành công.",
       "codeResent": "Đã gửi mã xác nhận mới."
     }
   },
   "aiCouncil": {
-    "title": "ĐỘI NGŨ AI",
-    "analyzeButton": "Phân tích & Lên Tín hiệu",
-    "analyzing": "Các tác nhân AI đang phân tích chiến lược...",
-    "needPrediction": "Chạy Dự đoán ML trước để mở khóa tính năng này.",
-    "councilReasoning": "Lập luận của Hội đồng",
-    "hideTranscript": "Ẩn bản ghi tác nhân",
-    "viewTranscript": "Xem toàn bộ bản ghi tác nhân",
+    "title": "AI COUNCIL",
+    "analyzeButton": "Phân tích & Lên tín hiệu",
+    "analyzing": "Agents đang phân tích chiến lược...",
+    "needPrediction": "Chạy ML Prediction trước để mở khóa tính năng này.",
+    "councilReasoning": "Lập luận của Council",
+    "hideTranscript": "Ẩn agent transcript",
+    "viewTranscript": "Xem toàn bộ agent transcript",
     "actionLabels": {
       "LONG": "LONG",
       "SHORT": "SHORT",
       "HOLD": "HOLD"
     },
     "confidence": "Confidence",
-    "entryZone": "Vùng vào lệnh & Thời điểm",
-    "leverage": "Đòn bẩy",
-    "positionSize": "Kích thước vị thế",
-    "takeProfit1": "Chốt lời 1",
-    "takeProfit2": "Chốt lời 2",
-    "tpSafe": "CL 1 (An toàn)",
-    "tpMoon": "CL 2 (Mặt trăng)",
-    "stopLoss": "Cắt lỗ cứng",
-    "riskReward": "Rủi ro/Lợi nhuận (CL1)",
-    "invalidationPoint": "⚠️ Điểm vô hiệu hóa:",
-    "connecting": "Đang thiết lập kết nối bảo mật tới Hội đồng AI Aether...",
+    "entryZone": "Entry Zone & Timing",
+    "leverage": "Leverage",
+    "positionSize": "Pos Size",
+    "takeProfit1": "Take Profit 1",
+    "takeProfit2": "Take Profit 2",
+    "tpSafe": "TP 1 (Safe)",
+    "tpMoon": "TP 2 (Moon)",
+    "stopLoss": "Hard Stop Loss",
+    "riskReward": "Risk/Reward (TP1)",
+    "invalidationPoint": "⚠️ Invalidation Point:",
+    "connecting": "Establishing secure connection to Aether AI Council...",
     "authRequired": "Yêu cầu xác thực. Vui lòng đăng nhập.",
     "rateLimited": "⏳ Đã đạt giới hạn tần suất. Vui lòng thử lại sau (tối đa 5 yêu cầu/giờ).",
     "streamingUnsupported": "Trình duyệt này không hỗ trợ streaming.",
     "parseFailed": "⚠️ Không thể phân tích kết quả — dữ liệu gốc đã được lưu vào console.",
     "consensusReached": "✅ AI Agent Team has reached consensus.",
     "consensusLine": "   Action: {{action}} | Confidence: {{confidence}}%",
-    "unavailable": "Đội ngũ AI hiện không khả dụng. Kiểm tra cấu hình DEEPSEEK_API_KEY.",
+    "unavailable": "AI Agent Team hiện không khả dụng. Kiểm tra cấu hình DEEPSEEK_API_KEY.",
     "errorLabel": "Lỗi:"
   }
 }

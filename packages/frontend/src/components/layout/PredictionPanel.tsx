@@ -123,16 +123,16 @@ export default function PredictionPanel({
 
       <div className="mt-3 rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-3">
         <p className="muted-label">{t("predictionPanel.riskProfile.title")}</p>
-        <div className="mt-2 grid grid-cols-3 gap-2">
+        <div className="mt-2 flex rounded-lg border border-violet-400/25 bg-cosmic-950/60 p-1">
           {RISK_PROFILE_VALUES.map((value) => (
             <button
               key={value}
               type="button"
               onClick={() => setRiskProfile(value)}
-              className={`rounded-lg border px-2 py-2 text-xs font-semibold transition ${
+              className={`flex-1 rounded-md px-2 py-2 text-[11px] font-semibold transition ${
                 riskProfile === value
-                  ? "border-cyan-300/80 bg-cyan-400/15 text-cyan-100"
-                  : "border-violet-400/35 bg-cosmic-900/70 text-violet-200 hover:border-violet-300/60"
+                  ? "bg-cyan-400/15 text-cyan-100 shadow-sm"
+                  : "text-violet-300/80 hover:text-violet-100"
               }`}
             >
               {t(RISK_PROFILE_LABEL_KEYS[value])}
@@ -146,7 +146,7 @@ export default function PredictionPanel({
         type="button"
         onClick={onPredict}
         disabled={loading}
-        className="mt-3 w-full rounded-xl border border-cyan-300/70 bg-cyan-500/10 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+        className="mt-3 w-full rounded-xl border border-cyan-300/70 bg-cyan-500/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {loading
           ? t("predictionPanel.running", {
