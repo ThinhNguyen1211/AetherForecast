@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 
-DEFAULT_SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,XAUUSD,BNBUSDT,PAXGUSDT"
+DEFAULT_SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT"
 DEFAULT_PRIMARY_MODEL = "amazon/chronos-2"
 DEFAULT_FALLBACK_MODEL = "amazon/chronos-t5-large"
 DEFAULT_TIMEFRAME = "1h,4h,1d"
@@ -213,7 +213,7 @@ def resolve_s3_targets(args: argparse.Namespace) -> tuple[str, str]:
     if not model_s3_uri:
         if not args.model_bucket.strip():
             raise ValueError("Provide --model-bucket or --model-s3-uri")
-        model_s3_uri = f"s3://{args.model_bucket.strip()}/chronos-v1/model/"
+        model_s3_uri = f"s3://{args.model_bucket.strip()}/models/"
 
     if not checkpoint_s3_uri:
         if not args.model_bucket.strip():

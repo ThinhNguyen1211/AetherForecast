@@ -20,8 +20,9 @@ def promote_model_version(
 ) -> str:
     s3_client = boto3.client("s3", region_name=aws_region, endpoint_url=endpoint_url)
 
-    root_bucket, root_prefix = parse_s3_uri(model_root_s3_uri)
-    manifest_key = f"{root_prefix.rstrip('/')}/manifest/latest.json".strip("/")
+    root_bucket, _ = parse_s3_uri(model_root_s3_uri)
+    # Per MLOps requirement the active-model manifest lives at the bucket root.
+    manifest_key = "manifest/latest.json"
 
     payload = {
         "active_model_s3_uri": trained_version_s3_uri,
@@ -37,11 +38,14 @@ def promote_model_version(
         ContentType="application/json",
     )
 
-    put_custom_metric(
-        metric_name="ModelPromotionSuccess",
-        value=1,
-        dimensions={"Pipeline": "model-promotion"},
-    )
+    try:
+        put_custom_metric(
+            metric_name="ModelPromotionSuccess",
+            value=1,
+            dimensions={"Pipeline": "model-promotion"},
+        )
+    except Exception as exc:
+        logger.warning("Failed to emit CloudWatch metric: %s", exc)
 
     logger.info("Promoted model version %s via manifest s3://%s/%s", trained_version_s3_uri, root_bucket, manifest_key)
     return f"s3://{root_bucket}/{manifest_key}"

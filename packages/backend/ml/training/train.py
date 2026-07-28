@@ -159,7 +159,7 @@ def load_runtime_config() -> TrainRuntimeConfig:
 
 def _resolve_model_version_uri(model_s3_uri: str) -> tuple[str, str]:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    version_uri = f"{model_s3_uri.rstrip('/')}/versions/{timestamp}/"
+    version_uri = f"{model_s3_uri.rstrip('/')}/{timestamp}/"
     return timestamp, version_uri
 
 
