@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -66,7 +66,7 @@ async def get_chart(
         try:
             candles.append(
                 Candle(
-                    timestamp=datetime.fromtimestamp(k[0] / 1000.0, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+                    timestamp=datetime.fromtimestamp(k[0] / 1000.0, tz=UTC).isoformat().replace("+00:00", "Z"),
                     open=float(k[1]),
                     high=float(k[2]),
                     low=float(k[3]),

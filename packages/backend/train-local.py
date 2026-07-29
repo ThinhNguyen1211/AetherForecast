@@ -213,7 +213,10 @@ def resolve_s3_targets(args: argparse.Namespace) -> tuple[str, str]:
     if not model_s3_uri:
         if not args.model_bucket.strip():
             raise ValueError("Provide --model-bucket or --model-s3-uri")
-        model_s3_uri = f"s3://{args.model_bucket.strip()}/models/"
+        # Must match the production default in core/config.py and ml/training/train.py
+        # (chronos-v1/model/) — a mismatched prefix here silently promotes trained
+        # versions into a location the deployed backend never reads from.
+        model_s3_uri = f"s3://{args.model_bucket.strip()}/chronos-v1/model/"
 
     if not checkpoint_s3_uri:
         if not args.model_bucket.strip():

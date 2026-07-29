@@ -17,9 +17,10 @@ import logging
 import os
 import threading
 import traceback
+from collections.abc import Generator
 from enum import Enum
 from queue import Empty, Queue
-from typing import Any, Generator, Literal
+from typing import Any, Literal
 
 from crewai import Agent, Crew, Process, Task
 from langchain_openai import ChatOpenAI
@@ -486,8 +487,8 @@ def run_trading_crew_streaming(
             # Only forward meaningful text, skip very short internal chatter
             if len(text.strip()) > 10:
                 event_queue.put(f"💭 {text[:600]}")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("step_callback error (non-fatal): %s", exc)
 
     def _run_crew() -> None:
         """Background thread: runs the blocking CrewAI pipeline.
@@ -602,7 +603,7 @@ def run_trading_crew_streaming(
             # [FINAL_RESULT] and [ERROR] are protocol messages that MUST be
             # yielded as a single "data:" line.  The JSON is already compacted
             # to a single line (no \n), so we bypass the line-splitter.
-            if message.startswith("[FINAL_RESULT]:") or message.startswith("[ERROR]:") or message.startswith("[TRACE]:"):
+            if message.startswith(("[FINAL_RESULT]:", "[ERROR]:", "[TRACE]:")):
                 yield f"data: {message}\n\n"
                 continue
 

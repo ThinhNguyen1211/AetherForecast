@@ -2,7 +2,7 @@ import logging
 import math
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 from statistics import pstdev
 from typing import Any
@@ -976,7 +976,7 @@ class ForecastInferenceService:
         tf_seconds = _TIMEFRAME_SECONDS.get(request.timeframe, 3600)
         last_candle = request.latest_candles[-1]
         candle_open_time = last_candle.timestamp
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         elapsed_seconds = max(1.0, (now_utc - candle_open_time).total_seconds())
         elapsed_ratio = min(1.0, elapsed_seconds / tf_seconds)
 
@@ -1240,7 +1240,7 @@ class ForecastInferenceService:
             model_name=model_name,
             model_version=model_version,
             explanation=explanation,
-            generated_at=datetime.now(timezone.utc),
+            generated_at=datetime.now(UTC),
         )
 
 

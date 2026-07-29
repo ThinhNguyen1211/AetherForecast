@@ -367,8 +367,8 @@ def write_to_s3(df: pd.DataFrame, symbol: str, bucket: str, prefix: str, region:
             symbol, error_code, error_msg, http_status,
             bucket, prefix.strip('/'),
         )
-    except Exception as exc:
-        logger.error("❌ Unexpected error writing %s to S3: %s", symbol, exc, exc_info=True)
+    except Exception:
+        logger.exception("❌ Unexpected error writing %s to S3", symbol)
 
 
 # ---------------------------------------------------------------------------
@@ -524,8 +524,8 @@ def main() -> None:
                     write_to_s3(df, symbol, bucket, prefix, region)
 
                 success += 1
-            except Exception as exc:
-                logger.error("Failed to process %s: %s", symbol, exc, exc_info=True)
+            except Exception:
+                logger.exception("Failed to process %s", symbol)
                 failed += 1
 
             # Rate limit protection: 200ms between symbols

@@ -6,7 +6,7 @@ import re
 import threading
 import xml.etree.ElementTree as et
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from urllib.parse import quote_plus
 
 import httpx
@@ -498,7 +498,7 @@ class SentimentScorer:
         return max(-1.0, min(1.0, normalized))
 
     def _cached_external_snapshot(self, symbol: str) -> ExternalSentimentSnapshot | None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         key = symbol.upper().strip()
         with self._external_cache_lock:
             entry = self._external_cache.get(key)
@@ -632,7 +632,7 @@ class SentimentScorer:
         with self._external_cache_lock:
             self._external_cache[normalized_symbol] = (
                 snapshot,
-                datetime.now(timezone.utc) + timedelta(seconds=self.external_refresh_seconds),
+                datetime.now(UTC) + timedelta(seconds=self.external_refresh_seconds),
             )
 
         logger.info(
@@ -733,7 +733,7 @@ class SentimentScorer:
         source = f"auto:market+{external_source}"
 
         has_external_signal = not (
-            external_source.endswith("none") or external_source.endswith("disabled")
+            external_source.endswith(("none", "disabled"))
         )
 
         if require_external and not has_external_signal:

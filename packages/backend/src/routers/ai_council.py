@@ -14,16 +14,14 @@ import asyncio
 import logging
 import traceback
 from collections.abc import Generator
+from typing import Literal
 
 import numpy as np
 from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-
-from typing import Literal
-
-from pydantic import BaseModel, Field
 
 from src.dependencies.cognito import require_authenticated_user
 from src.dependencies.s3_client import S3ParquetClient, get_s3_parquet_client

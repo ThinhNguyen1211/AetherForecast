@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Annotated, List
+from typing import Annotated
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     cognito_client_id: str = ""
     cognito_region: str = "ap-southeast-1"
 
-    cors_origins: Annotated[List[str], NoDecode] = Field(default_factory=lambda: ["*"])
+    cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["*"])
 
     symbols_source: str = "binance"
     binance_base_url: str = "https://api.binance.com"
@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     sentiment_mode: str = "simple"
     sentiment_model_id: str = "ProsusAI/finbert"
     sentiment_cache_dir: str = "/tmp/aetherforecast-sentiment-cache"
-    external_sentiment_news_rss_urls: Annotated[List[str], NoDecode] = Field(
+    external_sentiment_news_rss_urls: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
             "https://www.coindesk.com/arc/outboundfeeds/rss/",
             "https://cointelegraph.com/rss",
@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     external_x_search_bearer_token: str | None = None
     external_x_search_query: str = "bitcoin OR crypto OR ethereum OR ETF OR halving OR elon OR trump"
     external_x_search_limit: int = 60
-    external_event_keywords: Annotated[List[str], NoDecode] = Field(
+    external_event_keywords: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
             "elon",
             "trump",

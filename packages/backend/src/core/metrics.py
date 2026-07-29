@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
-from typing import Mapping, Sequence
 
 import boto3
 from botocore.config import Config

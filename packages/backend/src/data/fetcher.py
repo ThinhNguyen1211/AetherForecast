@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import boto3
@@ -122,7 +122,7 @@ class S3WatermarkStore:
             "symbol": symbol.upper(),
             "timeframe": timeframe,
             "last_close_time_ms": int(last_close_time_ms),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         }
         self.s3_client.put_object(
             Bucket=self.bucket,
@@ -309,7 +309,7 @@ class DataFetchService:
         async with self._semaphore:
             watermark = self.watermarks.get(symbol, self.config.timeframe)
             if watermark is None:
-                fallback_start = datetime.now(timezone.utc) - timedelta(
+                fallback_start = datetime.now(UTC) - timedelta(
                     minutes=self.config.bootstrap_lookback_minutes,
                 )
                 since_ms = int(fallback_start.timestamp() * 1000)
@@ -387,9 +387,9 @@ class DataFetchService:
                 except (httpx.HTTPError, BotoCoreError, ClientError, ValueError) as exc:
                     errors += 1
                     logger.warning("Symbol fetch failed: %s", exc)
-                except Exception as exc:  # pragma: no cover
+                except Exception:  # pragma: no cover
                     errors += 1
-                    logger.exception("Unexpected symbol fetch failure: %s", exc)
+                    logger.exception("Unexpected symbol fetch failure")
         except Exception:
             put_custom_metric(
                 metric_name="FetchErrors",

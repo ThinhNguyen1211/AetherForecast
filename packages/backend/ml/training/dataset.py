@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
-import awswrangler as wr
 import boto3
 import numpy as np
 import pandas as pd
+import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 from datasets import Dataset, DatasetDict
 
 logger = logging.getLogger(__name__)
@@ -45,44 +47,75 @@ def parse_symbols(symbols: str | list[str] | None) -> list[str]:
     return [symbol.upper() for symbol in raw if symbol.strip()]
 
 
-def _build_s3_path(config: TrainingDatasetConfig) -> str:
-    """Construct the S3 prefix for partitioned parquet data."""
+def _get_s3_fs() -> ds.FileSystem:
+    """Build a pyarrow S3 filesystem using the default AWS credential chain."""
+    import pyarrow.fs as fs
+
+    return fs.S3FileSystem(region=os.getenv("AWS_REGION", "ap-southeast-1"))
+
+
+def _build_local_cache_path(config: TrainingDatasetConfig) -> Path:
+    """Local path to cache downloaded parquet data for faster iteration."""
     parquet_prefix = os.getenv("PARQUET_PREFIX", "market/klines")
-    return f"s3://{config.data_bucket}/{parquet_prefix}/"
+    local_root = Path(os.getenv("TRAIN_LOCAL_CACHE", "./artifacts/local-data-cache"))
+    return local_root / config.data_bucket / parquet_prefix
+
+
+def _sync_symbol_data_locally(config: TrainingDatasetConfig) -> Path:
+    """Download parquet files for the requested symbols to a local cache.
+
+    Uses AWS CLI sync under the hood to leverage efficient parallel S3 transfers
+    and avoid urllib3 connection pool exhaustion in Python.
+    """
+    local_cache = _build_local_cache_path(config)
+    local_cache.mkdir(parents=True, exist_ok=True)
+
+    s3_prefix = f"s3://{config.data_bucket}/{os.getenv('PARQUET_PREFIX', 'market/klines')}/"
+    symbols_arg = " ".join(f"--exclude '*' --include 'symbol={symbol}/**'" for symbol in config.symbols)
+
+    # For a small number of symbols, sync the whole prefix and let local filtering do the rest.
+    # This avoids very long AWS CLI include/exclude chains.
+    cmd = f"aws s3 sync {s3_prefix} {local_cache} --only-show-errors"
+    logger.info("Syncing market data to local cache: %s", local_cache)
+    exit_code = os.system(cmd)
+    if exit_code != 0:
+        raise RuntimeError(f"aws s3 sync failed with exit code {exit_code}")
+
+    return local_cache
 
 
 def load_market_dataframe(config: TrainingDatasetConfig) -> pd.DataFrame:
     """Load enriched historical OHLCV data from the S3 data lake.
 
-    Reads Hive-partitioned parquet files (symbol, year, month, day) directly
-    from S3 using awswrangler, then normalizes columns for downstream training.
+    Downloads the requested symbol partitions to a local cache using AWS CLI,
+    then reads them with pyarrow for fast, reliable access regardless of the
+    number of files or symbols.
     """
-    s3_path = _build_s3_path(config)
-    logger.info("Loading market data from %s for symbols=%s", s3_path, config.symbols)
+    logger.info("Loading market data for symbols=%s", config.symbols)
 
     if not config.symbols:
         raise ValueError("No symbols provided for training data loading")
 
-    # awswrangler partition_filter receives a dict of partition key -> string value.
-    def _symbol_filter(partitions: dict[str, str]) -> bool:
-        return partitions.get("symbol", "").upper() in config.symbols
+    local_cache = _sync_symbol_data_locally(config)
+    logger.info("Reading parquet dataset from local cache: %s", local_cache)
 
     try:
-        session = boto3.Session(region_name=config.aws_region)
-        df = wr.s3.read_parquet(
-            path=s3_path,
-            dataset=True,
-            partition_filter=_symbol_filter,
-            boto3_session=session,
-        )
+        dataset = ds.dataset(str(local_cache), partitioning="hive")
+        table = dataset.to_table()
     except Exception as exc:
-        raise RuntimeError(f"Failed to read parquet data from {s3_path}: {exc}") from exc
+        raise RuntimeError(f"Failed to read parquet data from {local_cache}: {exc}") from exc
 
+    df = table.to_pandas()
     if df.empty:
-        raise ValueError(f"No market data found at {s3_path} for symbols {config.symbols}")
+        raise ValueError(f"No market data found for symbols {config.symbols}")
 
     # Normalize column names: lowercase and strip whitespace.
     df.columns = [str(col).lower().strip() for col in df.columns]
+
+    # Filter to requested symbols if the local cache contains extras.
+    if "symbol" in df.columns:
+        df["symbol"] = df["symbol"].str.upper()
+        df = df[df["symbol"].isin(config.symbols)]
 
     # Ensure required columns exist.
     required = {"symbol", "timestamp", "close"}
@@ -100,7 +133,7 @@ def load_market_dataframe(config: TrainingDatasetConfig) -> pd.DataFrame:
     if config.max_rows_per_symbol > 0:
         df = df.groupby("symbol").tail(config.max_rows_per_symbol)
 
-    # Add timeframe column if missing (derived from environment default or infer).
+    # Add timeframe column if missing.
     if "timeframe" not in df.columns:
         default_timeframe = config.timeframe.split(",")[0]
         df["timeframe"] = default_timeframe

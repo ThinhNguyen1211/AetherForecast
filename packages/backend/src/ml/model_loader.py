@@ -129,7 +129,7 @@ def _download_s3_prefix(
         last_modified_value = (
             last_modified.isoformat() if hasattr(last_modified, "isoformat") else str(last_modified)
         )
-        fingerprint_hasher.update(f"{key}|{etag}|{size}|{last_modified_value}\n".encode("utf-8"))
+        fingerprint_hasher.update(f"{key}|{etag}|{size}|{last_modified_value}\n".encode())
     remote_fingerprint = fingerprint_hasher.hexdigest()
 
     if marker.exists() and metadata_file.exists() and any(local_dir.iterdir()):
@@ -481,7 +481,8 @@ def _load_model_into_memory(
                 )
                 logger.info("Loaded model with %s", loader.__name__)
                 break
-            except Exception:
+            except Exception as exc:
+                logger.debug("Loader %s failed for %s: %s", loader.__name__, resolved_source, exc)
                 continue
 
         if model is None:

@@ -1,7 +1,7 @@
 import logging
 import math
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any
 
@@ -70,15 +70,15 @@ def _to_iso_timestamp(value: Any) -> str:
     if isinstance(value, datetime):
         dt = value
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
     return str(value)
 
 
 def _timestamp_to_ms(value: Any) -> int:
     if isinstance(value, datetime):
-        dt = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        dt = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
         return int(dt.timestamp() * 1000)
 
     if isinstance(value, (int, float)):
@@ -93,14 +93,14 @@ def _timestamp_to_ms(value: Any) -> int:
 
     parsed = datetime.fromisoformat(text)
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return int(parsed.timestamp() * 1000)
 
 
 def _normalize_record(record: dict[str, float | str]) -> dict[str, float | str] | None:
     try:
         timestamp_ms = _timestamp_to_ms(record.get("timestamp"))
-        timestamp = datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
+        timestamp = datetime.fromtimestamp(timestamp_ms / 1000, UTC).isoformat().replace("+00:00", "Z")
         open_price = float(record["open"])
         high_price = float(record["high"])
         low_price = float(record["low"])
@@ -189,7 +189,7 @@ class S3ParquetClient:
 
     def _estimate_partition_window_days(self, timeframe: str, limit: int) -> int:
         candle_seconds = TIMEFRAME_TO_SECONDS.get(timeframe, 60 * 60)
-        estimated_days = int(math.ceil((limit * candle_seconds) / (24 * 60 * 60) * 1.35))
+        estimated_days = math.ceil((limit * candle_seconds) / (24 * 60 * 60) * 1.35)
 
         if timeframe == "1m":
             min_window_days = 2
@@ -357,14 +357,14 @@ class S3ParquetClient:
         records: list[dict[str, float | str]] = []
 
         start_datetime = (
-            datetime.fromtimestamp(start_timestamp_ms / 1000, tz=timezone.utc)
+            datetime.fromtimestamp(start_timestamp_ms / 1000, tz=UTC)
             if start_timestamp_ms is not None
             else None
         )
         end_datetime = (
-            datetime.fromtimestamp((before_timestamp_ms - 1) / 1000, tz=timezone.utc)
+            datetime.fromtimestamp((before_timestamp_ms - 1) / 1000, tz=UTC)
             if before_timestamp_ms is not None
-            else datetime.now(timezone.utc)
+            else datetime.now(UTC)
         )
 
         partition_filter = self._build_partition_filter(start_datetime, end_datetime, timeframe, symbol)
@@ -386,7 +386,7 @@ class S3ParquetClient:
                         continue
 
                     for row in prepared.itertuples(index=False):
-                        timestamp_value = getattr(row, "timestamp")
+                        timestamp_value = row.timestamp
                         timestamp_ms = _safe_timestamp_to_ms(timestamp_value)
                         if timestamp_ms is None:
                             continue
@@ -398,11 +398,11 @@ class S3ParquetClient:
                         records.append(
                             {
                                 "timestamp": _to_iso_timestamp(timestamp_value),
-                                "open": float(getattr(row, "open")),
-                                "high": float(getattr(row, "high")),
-                                "low": float(getattr(row, "low")),
-                                "close": float(getattr(row, "close")),
-                                "volume": float(getattr(row, "volume")),
+                                "open": float(row.open),
+                                "high": float(row.high),
+                                "low": float(row.low),
+                                "close": float(row.close),
+                                "volume": float(row.volume),
                             }
                         )
 
@@ -472,7 +472,7 @@ class S3ParquetClient:
     ) -> list[dict[str, float | str]]:
         interval = TIMEFRAME_TO_BINANCE_INTERVAL[timeframe]
         total_limit = max(1, min(limit, 5000))
-        pages = int(math.ceil(total_limit / 1000))
+        pages = math.ceil(total_limit / 1000)
 
         all_rows: list[list[Any]] = []
         end_time_ms: int | None = before_timestamp_ms - 1 if before_timestamp_ms is not None else None
@@ -522,7 +522,7 @@ class S3ParquetClient:
 
         records: list[dict[str, float | str]] = []
         for row in all_rows[-total_limit:]:
-            timestamp = datetime.fromtimestamp(int(row[0]) / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
+            timestamp = datetime.fromtimestamp(int(row[0]) / 1000, UTC).isoformat().replace("+00:00", "Z")
             records.append(
                 {
                     "timestamp": timestamp,
@@ -576,7 +576,7 @@ class S3ParquetClient:
         if from_timestamp is not None:
             try:
                 before_timestamp_ms = _timestamp_to_ms(from_timestamp)
-                before_datetime = datetime.fromtimestamp(before_timestamp_ms / 1000, tz=timezone.utc)
+                before_datetime = datetime.fromtimestamp(before_timestamp_ms / 1000, tz=UTC)
             except Exception as exc:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -590,7 +590,7 @@ class S3ParquetClient:
                 return cached_records
 
         window_days = self._estimate_partition_window_days(normalized_timeframe, requested_limit)
-        window_end = before_datetime if before_datetime is not None else datetime.now(timezone.utc)
+        window_end = before_datetime if before_datetime is not None else datetime.now(UTC)
         window_start = window_end - timedelta(days=window_days)
         start_timestamp_ms = int(window_start.timestamp() * 1000)
 

@@ -44,7 +44,7 @@ async def fetch_fear_greed() -> float:
     except httpx.TimeoutException:
         logger.warning("Fear & Greed API timed out after %ss", _REQUEST_TIMEOUT.read)
         return _DEFAULT_FEAR_GREED
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("Failed to fetch Fear & Greed index: %s", exc)
         return _DEFAULT_FEAR_GREED
 
@@ -85,7 +85,7 @@ async def fetch_funding_rate(symbol: str) -> float:
             normalized_symbol,
         )
         return _DEFAULT_FUNDING_RATE
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning(
             "Failed to fetch funding rate for %s: %s",
             normalized_symbol,

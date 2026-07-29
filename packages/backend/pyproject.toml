@@ -18,3 +18,27 @@ pythonVersion = "3.11"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+# Explicit, code-level selection so CI behavior doesn't silently drift with whatever
+# ruff version `pip install ruff` happens to resolve to, and so it doesn't creep
+# beyond what's actually enforced here. Deliberately NOT selecting whole rule
+# families (UP, RUF, TRY, S, B) — several of their other codes (TRY003/300/301/400,
+# S101/105/108/314, UP042, RUF005, ...) are noisy or opinionated in ways this
+# project doesn't want; only the specific codes below are enforced.
+select = [
+    "E4", "E7", "E9", "F",
+    "UP006", "UP012", "UP017", "UP035", "UP041",
+    "PIE810",
+    "RUF022", "RUF046",
+    "I001",
+    "G201",
+    "B009",
+    "TRY401",
+    "S110", "S112",
+]
+# BLE001 (broad `except Exception`) and B008 (FastAPI Depends()/Query()/Body() in
+# argument defaults) are deliberately not selected above — both are intentional
+# patterns here (resilience fallbacks; the required FastAPI DI idiom), not bugs.
+# Listed here too so intent is documented if a future change broadens B/BLE.
+ignore = ["BLE001", "B008"]

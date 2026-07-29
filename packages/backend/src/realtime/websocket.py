@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 
@@ -78,7 +78,7 @@ class BinanceRealtimeHub:
             return None
 
         timestamp_ms = int(kline.get("t", 0))
-        timestamp = datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).isoformat()
+        timestamp = datetime.fromtimestamp(timestamp_ms / 1000, UTC).isoformat()
 
         return {
             "event": "kline",
@@ -134,7 +134,7 @@ class BinanceRealtimeHub:
                         parsed = self._parse_kline_message(payload)
                         if parsed is not None:
                             await self._broadcast(stream_key, parsed)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Timed out reading Binance stream for %s (%s); reconnecting", symbol, timeframe)
             except asyncio.CancelledError:
                 raise
