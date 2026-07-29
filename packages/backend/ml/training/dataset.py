@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import boto3
 import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
-import pyarrow.parquet as pq
 from datasets import Dataset, DatasetDict
 
 logger = logging.getLogger(__name__)
@@ -71,7 +69,6 @@ def _sync_symbol_data_locally(config: TrainingDatasetConfig) -> Path:
     local_cache.mkdir(parents=True, exist_ok=True)
 
     s3_prefix = f"s3://{config.data_bucket}/{os.getenv('PARQUET_PREFIX', 'market/klines')}/"
-    symbols_arg = " ".join(f"--exclude '*' --include 'symbol={symbol}/**'" for symbol in config.symbols)
 
     # For a small number of symbols, sync the whole prefix and let local filtering do the rest.
     # This avoids very long AWS CLI include/exclude chains.
@@ -172,7 +169,9 @@ def _build_series_splits(
             continue
 
         split_index = int(len(closes) * config.train_split_ratio)
-        split_index = max(config.context_length + 1, min(split_index, len(closes) - config.horizon - 1))
+        split_index = max(
+            config.context_length + 1, min(split_index, len(closes) - config.horizon - 1)
+        )
 
         train_inputs.append(closes[:split_index])
         eval_start = max(0, split_index - config.context_length)
@@ -200,10 +199,12 @@ def build_training_datasets(config: TrainingDatasetConfig) -> DatasetDict:
             records.append({"series_id": idx, "values": series.tolist()})
         return Dataset.from_list(records)
 
-    dataset_dict = DatasetDict({
-        "train": _to_dataset(train_series),
-        "eval": _to_dataset(eval_series),
-    })
+    dataset_dict = DatasetDict(
+        {
+            "train": _to_dataset(train_series),
+            "eval": _to_dataset(eval_series),
+        }
+    )
 
     logger.info(
         "Dataset built: train_series=%s eval_series=%s",

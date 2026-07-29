@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
-from pathlib import Path
 import re
-from typing import Iterable
+from collections.abc import Iterable
+from dataclasses import dataclass
+from pathlib import Path
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
@@ -40,7 +40,9 @@ class S3CheckpointManager:
 
     def __post_init__(self) -> None:
         self.bucket, self.prefix = parse_s3_uri(self.s3_uri)
-        self.s3_client = boto3.client("s3", region_name=self.aws_region, endpoint_url=self.endpoint_url)
+        self.s3_client = boto3.client(
+            "s3", region_name=self.aws_region, endpoint_url=self.endpoint_url
+        )
 
     def _list_keys(self, prefix: str) -> list[str]:
         paginator = self.s3_client.get_paginator("list_objects_v2")

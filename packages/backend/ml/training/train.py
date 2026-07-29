@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import importlib
 import json
 import logging
 import os
-from pathlib import Path
 import signal
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
+from transformers import TrainerCallback, TrainerControl, TrainerState
 
 from ml.training.checkpoint import S3CheckpointCallback, S3CheckpointManager
 from ml.training.dataset import (
@@ -22,7 +23,6 @@ from ml.training.dataset import (
 )
 from ml.training.promote_model import promote_model_version
 from ml.training.trainer import TrainingHyperParameters, build_trainer
-from transformers import TrainerCallback, TrainerControl, TrainerState
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("aetherforecast.training")
@@ -35,7 +35,9 @@ DEFAULT_CHRONOS_FALLBACK_MODEL_ID = "amazon/chronos-t5-large"
 def _handle_interrupt(signum, _frame) -> None:
     global _INTERRUPTED
     _INTERRUPTED = True
-    logger.warning("Received signal %s. Training will stop after current step and checkpoint.", signum)
+    logger.warning(
+        "Received signal %s. Training will stop after current step and checkpoint.", signum
+    )
 
 
 @dataclass
@@ -82,7 +84,9 @@ class TrainRuntimeConfig:
 
 
 class InterruptAwareCallback(TrainerCallback):
-    def on_step_end(self, args, state: TrainerState, control: TrainerControl, **kwargs) -> TrainerControl:
+    def on_step_end(
+        self, args, state: TrainerState, control: TrainerControl, **kwargs
+    ) -> TrainerControl:
         if _INTERRUPTED:
             control.should_save = True
             control.should_training_stop = True
@@ -158,8 +162,11 @@ def load_runtime_config() -> TrainRuntimeConfig:
 
 
 def _resolve_model_version_uri(model_s3_uri: str) -> tuple[str, str]:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    version_uri = f"{model_s3_uri.rstrip('/')}/{timestamp}/"
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    # Must land under the model root's "versions/" subfolder (e.g.
+    # chronos-v1/model/versions/<timestamp>/) to match the actual bucket structure
+    # promote_model_version()'s manifest points into.
+    version_uri = f"{model_s3_uri.rstrip('/')}/versions/{timestamp}/"
     return timestamp, version_uri
 
 
@@ -225,7 +232,9 @@ def _prepare_chronos2_inputs(
     train_inputs: list[np.ndarray] = []
     validation_inputs: list[np.ndarray] = []
 
-    group_columns = ["symbol", "timeframe"] if "timeframe" in market_dataframe.columns else ["symbol"]
+    group_columns = (
+        ["symbol", "timeframe"] if "timeframe" in market_dataframe.columns else ["symbol"]
+    )
     minimum_required = max(horizon + context_length + 8, horizon * 4)
 
     for group_key, group in market_dataframe.groupby(group_columns):
@@ -283,7 +292,9 @@ def _resolve_chronos2_num_steps(
         return config.chronos2_train_steps
 
     effective_context = int(context_length if context_length is not None else config.context_length)
-    approx_windows = sum(max(1, len(series) - effective_context - config.horizon + 1) for series in train_inputs)
+    approx_windows = sum(
+        max(1, len(series) - effective_context - config.horizon + 1) for series in train_inputs
+    )
     context_penalty = max(1.0, effective_context / 256.0)
     denominator = max(int(config.batch_size * 64 * context_penalty), 1)
     steps_per_epoch = max(10, approx_windows // denominator)
@@ -322,7 +333,7 @@ def _build_postprocess_calibration_payload(
     vol_spread = max(0.0, p80_vol - median_vol)
 
     variance_scale = float(np.clip(config.predict_variance_scale + vol_spread * 14.0, 1.02, 1.60))
-    diffusion_bias = int(round((0.015 - median_vol) * 120.0))
+    diffusion_bias = round((0.015 - median_vol) * 120.0)
     diffusion_steps = int(np.clip(config.predict_diffusion_steps + diffusion_bias, 2, 6))
 
     return {
@@ -356,7 +367,7 @@ def _write_postprocess_calibration(
 def _load_chronos2_pipeline(config: TrainRuntimeConfig) -> tuple[Any, str]:
     try:
         base_module = importlib.import_module("chronos.base")
-        BaseChronosPipeline = getattr(base_module, "BaseChronosPipeline")
+        BaseChronosPipeline = base_module.BaseChronosPipeline
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("chronos package is required for Chronos-2 training") from exc
 
@@ -447,7 +458,9 @@ def _train_with_chronos2_native(
     if train_inputs is None or validation_inputs is None:
         if last_context_error is not None:
             raise last_context_error
-        raise ValueError("Unable to prepare Chronos-2 training inputs for any candidate context length")
+        raise ValueError(
+            "Unable to prepare Chronos-2 training inputs for any candidate context length"
+        )
 
     if effective_context_length != config.context_length:
         logger.warning(
@@ -469,7 +482,9 @@ def _train_with_chronos2_native(
     else:
         logger.warning("CUDA is not available. Chronos-2 native fine-tuning will run on CPU.")
 
-    num_steps = _resolve_chronos2_num_steps(config, train_inputs, context_length=effective_context_length)
+    num_steps = _resolve_chronos2_num_steps(
+        config, train_inputs, context_length=effective_context_length
+    )
     logger.info(
         "Chronos-2 native fine-tune: train_series=%s validation_series=%s num_steps=%s context_length=%s",
         len(train_inputs),

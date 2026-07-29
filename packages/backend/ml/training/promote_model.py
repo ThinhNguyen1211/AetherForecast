@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
 import logging
+from datetime import UTC, datetime
 
 import boto3
 
@@ -20,19 +20,21 @@ def promote_model_version(
 ) -> str:
     s3_client = boto3.client("s3", region_name=aws_region, endpoint_url=endpoint_url)
 
-    root_bucket, _ = parse_s3_uri(model_root_s3_uri)
-    # Per MLOps requirement the active-model manifest lives at the bucket root.
-    manifest_key = "manifest/latest.json"
+    bucket, prefix = parse_s3_uri(model_root_s3_uri)
+    # Must match model_loader.py's _resolve_active_model_uri_from_manifest(), which
+    # reads the manifest from "{prefix}/manifest/latest.json" under the model root
+    # (e.g. chronos-v1/model/manifest/latest.json) — not the bucket root.
+    manifest_key = f"{prefix.rstrip('/')}/manifest/latest.json".strip("/")
 
     payload = {
         "active_model_s3_uri": trained_version_s3_uri,
-        "promoted_at": datetime.now(timezone.utc).isoformat(),
+        "promoted_at": datetime.now(UTC).isoformat(),
         "status": "latest",
         "project": "AetherForecast",
     }
 
     s3_client.put_object(
-        Bucket=root_bucket,
+        Bucket=bucket,
         Key=manifest_key,
         Body=json.dumps(payload, indent=2).encode("utf-8"),
         ContentType="application/json",
@@ -47,5 +49,10 @@ def promote_model_version(
     except Exception as exc:
         logger.warning("Failed to emit CloudWatch metric: %s", exc)
 
-    logger.info("Promoted model version %s via manifest s3://%s/%s", trained_version_s3_uri, root_bucket, manifest_key)
-    return f"s3://{root_bucket}/{manifest_key}"
+    logger.info(
+        "Promoted model version %s via manifest s3://%s/%s",
+        trained_version_s3_uri,
+        bucket,
+        manifest_key,
+    )
+    return f"s3://{bucket}/{manifest_key}"
