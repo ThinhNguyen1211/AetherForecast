@@ -219,6 +219,7 @@
     "connecting": "Establishing secure connection to Aether AI Council...",
     "authRequired": "Authentication required. Please sign in.",
     "rateLimited": "⏳ Rate limit reached. Please try again later (max 5 requests/hour).",
+    "systemOverloaded": "AI System is currently overloaded. Please try again later.",
     "streamingUnsupported": "Streaming not supported by this browser.",
     "parseFailed": "⚠️ Failed to parse result — raw output saved to console.",
     "consensusReached": "✅ AI Agent Team has reached consensus.",

@@ -219,6 +219,7 @@
     "connecting": "Establishing secure connection to Aether AI Council...",
     "authRequired": "Yêu cầu xác thực. Vui lòng đăng nhập.",
     "rateLimited": "⏳ Đã đạt giới hạn tần suất. Vui lòng thử lại sau (tối đa 5 yêu cầu/giờ).",
+    "systemOverloaded": "Hệ thống AI hiện đang quá tải. Vui lòng thử lại sau.",
     "streamingUnsupported": "Trình duyệt này không hỗ trợ streaming.",
     "parseFailed": "⚠️ Không thể phân tích kết quả — dữ liệu gốc đã được lưu vào console.",
     "consensusReached": "✅ AI Agent Team has reached consensus.",

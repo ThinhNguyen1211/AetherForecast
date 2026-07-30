@@ -72,8 +72,10 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction, riskP
   const [finalDecision, setFinalDecision] = useState<AiCouncilDecision | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showTranscript, setShowTranscript] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const terminalRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
   // Auto-scroll terminal to bottom
   useEffect(() => {
@@ -81,6 +83,25 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction, riskP
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
     }
   }, [aiLogs]);
+
+  const showToast = useCallback((message: string) => {
+    setToastMessage(message);
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+      toastTimerRef.current = null;
+    }, 6000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleAnalyze = useCallback(async () => {
     if (isAnalyzing) return;
@@ -120,8 +141,9 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction, riskP
       });
 
       if (response.status === 429) {
-        setError(t("aiCouncil.rateLimited"));
-        setIsAnalyzing(false);
+        console.warn("[AI Council] rate limited (429)", { symbol, timeframe });
+        setAiLogs([]);
+        showToast(t("aiCouncil.systemOverloaded"));
         return;
       }
 
@@ -214,6 +236,19 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction, riskP
       if (err instanceof DOMException && err.name === "AbortError") {
         return;
       }
+
+      // fetch() throws a TypeError for network-level failures (DNS, connection
+      // refused, CORS block) — distinct from HTTP error responses (handled
+      // above) or JSON parsing issues (handled inline above). From the user's
+      // perspective this looks the same as a 429: the service is simply
+      // unreachable right now.
+      if (err instanceof TypeError) {
+        console.error("[AI Council] network error reaching SSE endpoint", { symbol, timeframe, error: err });
+        setAiLogs([]);
+        showToast(t("aiCouncil.systemOverloaded"));
+        return;
+      }
+
       const message =
         err instanceof Error
           ? err.message
@@ -223,12 +258,23 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction, riskP
     } finally {
       setIsAnalyzing(false);
     }
-  }, [symbol, timeframe, riskProfile, isAnalyzing, t]);
+  }, [symbol, timeframe, riskProfile, isAnalyzing, t, showToast]);
 
   const style = finalDecision ? ACTION_STYLES[finalDecision.action] : null;
 
   return (
     <div className="mt-4 rounded-xl border border-violet-400/25 bg-cosmic-900/60 p-4">
+      {toastMessage && (
+        <div
+          role="alert"
+          className="fixed bottom-6 right-6 z-50 max-w-sm rounded-xl border border-red-400/40 bg-cosmic-950/95 px-4 py-3 text-sm text-red-100 shadow-[0_12px_40px_rgba(0,0,0,0.5)] backdrop-blur-sm"
+        >
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5">⚠️</span>
+            <p>{toastMessage}</p>
+          </div>
+        </div>
+      )}
       <p className="muted-label">{t("aiCouncil.title")}</p>
 
       {/* ── Main Action Button ── */}

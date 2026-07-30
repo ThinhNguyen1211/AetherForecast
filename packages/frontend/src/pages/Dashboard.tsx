@@ -15,6 +15,7 @@ import {
   fetchBinance24hTicker,
   fetchBinanceMarkPrice,
   Candle,
+  PredictResponse,
   RealtimeKlineMessage,
   connectRealtimeKline,
   fetchChart,
@@ -68,6 +69,8 @@ const FORECAST_HORIZON_OPTIONS = [
 ];
 
 const SUPPORTED_TIMEFRAMES: Timeframe[] = ["1m", "5m", "15m", "1h", "4h", "1d", "1w"];
+const PREDICTION_CACHE_KEY = "aether_last_prediction";
+const PREDICTION_CACHE_MAX_AGE_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 interface RegionalClockContext {
   timeZone: string;
@@ -461,6 +464,11 @@ export default function Dashboard() {
   const [backgroundHydrating, setBackgroundHydrating] = useState(false);
   const [lastInitialLoadMs, setLastInitialLoadMs] = useState<number | null>(null);
   const [predictionStage, setPredictionStage] = useState<PredictionStageKey | null>(null);
+  // Guards the "clear prediction on symbol/timeframe change" effect below from
+  // wiping out a prediction we just restored from localStorage on mount (that
+  // restore also changes symbol/timeframe, which looks identical to a normal
+  // user-driven symbol switch from that effect's point of view).
+  const isRestoringPredictionRef = useRef(false);
 
   const debouncedQuery = useDebouncedValue(searchQuery, 180);
 
@@ -1037,6 +1045,24 @@ export default function Dashboard() {
 
       setPrediction(result);
       setPredictionAnchor(anchor);
+
+      try {
+        window.localStorage.setItem(
+          PREDICTION_CACHE_KEY,
+          JSON.stringify({
+            symbol,
+            timeframe,
+            predictedAt: Date.now(),
+            prediction: result,
+            predictionAnchor: anchor,
+          }),
+        );
+      } catch (cacheError) {
+        // Best-effort only — a full quota or disabled storage must never
+        // affect the actual prediction flow.
+        console.warn("[Dashboard] Failed to cache prediction to localStorage", cacheError);
+      }
+
       setApiStatus("online");
       await waitFor(PREDICTION_RENDER_SETTLE_MS);
     } catch (error) {
@@ -1289,9 +1315,80 @@ export default function Dashboard() {
   }, [token, symbol]);
 
   useEffect(() => {
+    if (isRestoringPredictionRef.current) {
+      isRestoringPredictionRef.current = false;
+      return;
+    }
     setPrediction(null);
     setPredictionAnchor(null);
   }, [symbol, timeframe, setPrediction]);
+
+  // Restore the last prediction from localStorage on mount, recovering the
+  // pre-reload view after e.g. a browser memory-saver tab discard/reload.
+  // Mount-only by design: this is a one-shot recovery, not an ongoing sync.
+  useEffect(() => {
+    let cached: {
+      symbol?: unknown;
+      timeframe?: unknown;
+      predictedAt?: unknown;
+      prediction?: unknown;
+      predictionAnchor?: unknown;
+    } | null = null;
+
+    try {
+      const raw = window.localStorage.getItem(PREDICTION_CACHE_KEY);
+      if (!raw) {
+        return;
+      }
+      cached = JSON.parse(raw);
+    } catch (parseError) {
+      console.warn("[Dashboard] Failed to parse cached prediction, clearing it", parseError);
+      try {
+        window.localStorage.removeItem(PREDICTION_CACHE_KEY);
+      } catch {
+        // best-effort cleanup only
+      }
+      return;
+    }
+
+    if (!cached) {
+      return;
+    }
+
+    const cachedSymbol = typeof cached.symbol === "string" ? cached.symbol.toUpperCase() : "";
+    const predictedAt = typeof cached.predictedAt === "number" ? cached.predictedAt : Number.NaN;
+    const predictionPayload = cached.prediction as Partial<PredictResponse> | null | undefined;
+
+    const isFresh = Number.isFinite(predictedAt) && Date.now() - predictedAt < PREDICTION_CACHE_MAX_AGE_MS;
+    const isStructurallyValid =
+      cachedSymbol.length > 0 &&
+      isSupportedTimeframe(cached.timeframe) &&
+      !!predictionPayload &&
+      typeof predictionPayload === "object" &&
+      Array.isArray(predictionPayload.prediction_array) &&
+      predictionPayload.prediction_array.length > 0;
+
+    if (!isFresh || !isStructurallyValid) {
+      try {
+        window.localStorage.removeItem(PREDICTION_CACHE_KEY);
+      } catch {
+        // best-effort cleanup only
+      }
+      return;
+    }
+
+    const restoredAnchor =
+      cached.predictionAnchor && typeof cached.predictionAnchor === "object"
+        ? (cached.predictionAnchor as { baseTimestamp: string; baseClose: number })
+        : null;
+
+    isRestoringPredictionRef.current = true;
+    setSymbol(cachedSymbol);
+    setTimeframe(cached.timeframe as Timeframe);
+    setPrediction(predictionPayload as PredictResponse);
+    setPredictionAnchor(restoredAnchor);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (previousHorizonHoursRef.current === selectedHorizonHours) {
@@ -1489,7 +1586,7 @@ export default function Dashboard() {
             />
           </aside>
 
-          <main className="flex-1 min-w-0 h-full flex flex-col overflow-y-auto overflow-x-hidden scrollbar-slim rounded-2xl glass-panel p-3 lg:p-4">
+          <main className="flex-1 min-w-0 h-full max-w-screen-2xl mx-auto flex flex-col overflow-y-auto overflow-x-hidden scrollbar-slim rounded-2xl glass-panel p-3 lg:p-4">
             {errorMessage && (
               <div className="mb-3 rounded-xl border border-rose-400/50 bg-rose-500/15 px-4 py-2 text-sm text-rose-100">
                 {errorMessage}
