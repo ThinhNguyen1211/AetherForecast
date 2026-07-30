@@ -1574,7 +1574,7 @@ export default function Dashboard() {
           />
         </div>
 
-        <div className="flex flex-row h-[calc(100vh-80px)] w-full overflow-hidden p-3 lg:p-4 gap-4">
+        <div className="flex flex-row justify-center h-[calc(100vh-80px)] w-full max-w-[1700px] mx-auto overflow-hidden p-3 lg:p-4 gap-4">
           <aside className="w-[280px] h-full flex-shrink-0 flex flex-col overflow-hidden">
             <Sidebar
               symbols={filteredSymbols}
@@ -1586,7 +1586,7 @@ export default function Dashboard() {
             />
           </aside>
 
-          <main className="flex-1 min-w-0 h-full max-w-screen-2xl mx-auto flex flex-col overflow-y-auto overflow-x-hidden scrollbar-slim rounded-2xl glass-panel p-3 lg:p-4">
+          <main className="flex-1 min-w-0 h-full flex flex-col overflow-y-auto overflow-x-hidden scrollbar-slim rounded-2xl glass-panel p-3 lg:p-4">
             {errorMessage && (
               <div className="mb-3 rounded-xl border border-rose-400/50 bg-rose-500/15 px-4 py-2 text-sm text-rose-100">
                 {errorMessage}
