@@ -72,6 +72,19 @@ class ForecastInferenceService:
             require_s3_model=True,
         )
 
+    def warm_up_model(self) -> LoadedForecastModel:
+        """Force the Chronos-2 model to load now instead of on the first request.
+
+        Intended to be called once from the FastAPI lifespan startup hook so
+        the ~20s S3 download + PyTorch load happens during container boot,
+        not during the first user's /predict call. _load_model() itself is
+        already idempotent (the underlying model object is cached via
+        _load_model_into_memory()'s lru_cache), so calling this repeatedly is
+        harmless — it's a public entry point for that same cached load, not a
+        second loading mechanism.
+        """
+        return self._load_model()
+
     def _apply_sentiment(self, forecast: np.ndarray, sentiment_score: float | None) -> np.ndarray:
         if sentiment_score is None:
             return forecast

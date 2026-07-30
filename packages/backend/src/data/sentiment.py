@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import math
 import re
@@ -580,18 +581,24 @@ class SentimentScorer:
         # so the total latency was the SUM of every source's round-trip
         # instead of the MAX of the slowest one.
         #
-        # asyncio.run() is safe here because this method is only ever reached
-        # from FastAPI's sync (non-`async def`) /predict route, which
-        # Starlette executes in a plain worker thread via run_in_threadpool —
-        # there is no event loop already running on that thread. If this call
-        # chain is ever converted to `async def` end-to-end, replace this with
-        # a plain `await self._gather_external_signals_async(...)`.
-        (
-            fear_greed_index,
-            headlines,
-            (x_score, x_headlines),
-            (geopolitics_score, geo_headlines),
-        ) = asyncio.run(self._gather_external_signals_async(normalized_symbol))
+        # This method is reached from BOTH a sync context (/predict, run in a
+        # plain threadpool worker with no event loop) AND an async context
+        # (/api/ai/analyze's `async def` route, which calls this inline while
+        # its own event loop is already running). A bare asyncio.run() here
+        # crashes with "cannot be called from a running event loop" in the
+        # second case. Submitting to a dedicated one-off thread guarantees a
+        # loop-free thread every time, regardless of the caller's context. A
+        # fresh executor per call (not a shared persistent one) is
+        # deliberate: it lets concurrent requests each get their own isolated
+        # thread instead of serializing behind a single shared worker.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(asyncio.run, self._gather_external_signals_async(normalized_symbol))
+            (
+                fear_greed_index,
+                headlines,
+                (x_score, x_headlines),
+                (geopolitics_score, geo_headlines),
+            ) = future.result()
 
         weighted_total = 0.0
         weight_sum = 0.0

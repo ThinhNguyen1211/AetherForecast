@@ -13,6 +13,7 @@ from slowapi.util import get_remote_address
 from src.core.config import get_settings
 from src.core.logging import configure_logging
 from src.core.metrics import put_custom_metrics
+from src.ml.inference import get_inference_service
 from src.realtime.websocket import get_realtime_hub
 from src.routers import ai_council, chart, health, predict, realtime, symbols
 
@@ -25,6 +26,20 @@ limiter = Limiter(key_func=get_remote_address)
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     hub = get_realtime_hub()
+
+    # Preload the Chronos-2 model (S3 download + PyTorch load, ~20s) during
+    # boot instead of lazily on the first /predict request, so the first user
+    # doesn't pay the cold-start cost. Runs synchronously and blocks startup
+    # on purpose — the app shouldn't accept traffic before the model is ready
+    # anyway. A failure here is logged but does not prevent the app from
+    # starting: /predict will simply retry the (now-uncached) load on its
+    # first real request and surface any persistent error there instead.
+    try:
+        get_inference_service().warm_up_model()
+        logger.info("Chronos-2 model preloaded successfully during startup")
+    except Exception:
+        logger.exception("Model warm-up at startup failed; will lazy-load on first request")
+
     try:
         yield
     finally:
