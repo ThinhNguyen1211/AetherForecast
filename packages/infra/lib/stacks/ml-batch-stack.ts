@@ -120,7 +120,7 @@ export class MlBatchStack extends Construct {
         instanceTypes: ["g4dn.2xlarge"],
         securityGroupIds: [batchSecurityGroup.securityGroupId],
         subnets: privateSubnetIds,
-        ec2Configuration: [{ imageType: "ECS_AL2_NVIDIA" }],
+        ec2Configuration: [{ imageType: "ECS_AL2023_NVIDIA" }],
         tags: {
           Workload: "training",
         },
