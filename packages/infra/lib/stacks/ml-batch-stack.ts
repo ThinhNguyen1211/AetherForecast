@@ -127,9 +127,9 @@ export class MlBatchStack extends Construct {
       },
     });
 
-    this.jobQueueName = "aetherforecast-training-queue";
+    this.jobQueueName = "aetherforecast-training-queue-v2";
 
-    this.jobQueue = new batch.CfnJobQueue(this, "TrainingJobQueue", {
+    this.jobQueue = new batch.CfnJobQueue(this, "TrainingJobQueueV2", {
       jobQueueName: this.jobQueueName,
       priority: 1,
       state: "ENABLED",
