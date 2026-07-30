@@ -145,8 +145,8 @@ export class MlBatchStack extends Construct {
       ],
     });
 
-    this.jobDefinition = new batch.CfnJobDefinition(this, "TrainingJobDefinition", {
-      jobDefinitionName: "aetherforecast-training-job",
+    this.jobDefinition = new batch.CfnJobDefinition(this, "TrainingJobDefinitionV2", {
+      jobDefinitionName: "aetherforecast-training-job-v2",
       type: "container",
       platformCapabilities: ["EC2"],
       retryStrategy: { attempts: 2 },
