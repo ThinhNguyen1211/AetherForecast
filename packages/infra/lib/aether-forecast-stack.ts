@@ -119,6 +119,10 @@ export class AetherForecastStack extends Stack {
       value: mlBatch.jobDefinition.attrJobDefinitionArn,
     });
 
+    new CfnOutput(this, "TrainingMonthlyScheduleRuleName", {
+      value: mlBatch.monthlyScheduleRuleName,
+    });
+
     new CfnOutput(this, "CognitoUserPoolId", {
       value: auth.userPool.userPoolId,
     });

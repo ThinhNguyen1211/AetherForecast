@@ -2,6 +2,7 @@ import { Stack } from "aws-cdk-lib";
 import * as batch from "aws-cdk-lib/aws-batch";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecr from "aws-cdk-lib/aws-ecr";
+import * as events from "aws-cdk-lib/aws-events";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
@@ -17,11 +18,12 @@ export interface MlBatchStackProps {
 
 export class MlBatchStack extends Construct {
   public readonly computeEnvironment: batch.CfnComputeEnvironment;
-  public readonly onDemandComputeEnvironment: batch.CfnComputeEnvironment;
   public readonly jobQueue: batch.CfnJobQueue;
   public readonly jobDefinition: batch.CfnJobDefinition;
   public readonly jobQueueName: string;
   public readonly trainingLogGroup: logs.LogGroup;
+  public readonly monthlyScheduleRule: events.CfnRule;
+  public readonly monthlyScheduleRuleName: string;
 
   constructor(scope: Construct, id: string, props: MlBatchStackProps) {
     super(scope, id);
@@ -103,13 +105,16 @@ export class MlBatchStack extends Construct {
       computeEnvironmentName: "aetherforecast-training-ce-spot",
       type: "MANAGED",
       serviceRole: batchServiceRole.roleArn,
-      state: "DISABLED",
+      state: "ENABLED",
       computeResources: {
         type: "SPOT",
         allocationStrategy: "SPOT_CAPACITY_OPTIMIZED",
         minvCpus: 0,
         desiredvCpus: 0,
-        maxvCpus: 128,
+        // Capped well below the previous 128 — a single training job only
+        // needs 8 vCPUs (one g4dn.2xlarge); this still allows a few
+        // concurrent/retry jobs while bounding worst-case runaway cost.
+        maxvCpus: 32,
         bidPercentage: 100,
         instanceRole: instanceProfile.attrArn,
         instanceTypes: ["g4dn.2xlarge"],
@@ -122,45 +127,19 @@ export class MlBatchStack extends Construct {
       },
     });
 
-    this.onDemandComputeEnvironment = new batch.CfnComputeEnvironment(
-      this,
-      "TrainingOnDemandComputeEnvironment",
-      {
-        computeEnvironmentName: "aetherforecast-training-ce-ondemand",
-        type: "MANAGED",
-        serviceRole: batchServiceRole.roleArn,
-        state: "ENABLED",
-        computeResources: {
-          type: "EC2",
-          allocationStrategy: "BEST_FIT_PROGRESSIVE",
-          minvCpus: 0,
-          desiredvCpus: 0,
-          maxvCpus: 128,
-          instanceRole: instanceProfile.attrArn,
-          instanceTypes: ["g4dn.2xlarge"],
-          securityGroupIds: [batchSecurityGroup.securityGroupId],
-          subnets: privateSubnetIds,
-          ec2Configuration: [{ imageType: "ECS_AL2_NVIDIA" }],
-          tags: {
-            Workload: "training",
-          },
-        },
-      },
-    );
-
     this.jobQueueName = "aetherforecast-training-queue";
 
     this.jobQueue = new batch.CfnJobQueue(this, "TrainingJobQueue", {
       jobQueueName: this.jobQueueName,
       priority: 1,
       state: "ENABLED",
+      // Spot-only per explicit user directive: no On-Demand fallback, to
+      // eliminate any risk of runaway On-Demand GPU cost. Tradeoff accepted:
+      // if Spot capacity is unavailable for g4dn.2xlarge, a scheduled run
+      // will stay queued until capacity frees up rather than falling back.
       computeEnvironmentOrder: [
         {
           order: 1,
-          computeEnvironment: this.onDemandComputeEnvironment.ref,
-        },
-        {
-          order: 2,
           computeEnvironment: this.computeEnvironment.ref,
         },
       ],
@@ -233,6 +212,56 @@ export class MlBatchStack extends Construct {
     });
 
     this.jobQueue.addDependency(this.computeEnvironment);
-    this.jobQueue.addDependency(this.onDemandComputeEnvironment);
+
+    // --- Monthly automated trigger ---
+    // Nothing previously scheduled this job at all; scheduler-stack.ts is a
+    // separate, unrelated 30-minute market-data-fetch cron. Hand-rolled with
+    // CfnRule (L1) rather than the aws-events-targets.BatchJob L2 helper, to
+    // stay consistent with this file's existing all-L1 Batch resources
+    // (CfnComputeEnvironment/CfnJobQueue/CfnJobDefinition) and avoid an
+    // untested L1/L2 interop assumption.
+    const eventBridgeBatchRole = new iam.Role(this, "TrainingScheduleInvokeRole", {
+      assumedBy: new iam.ServicePrincipal("events.amazonaws.com"),
+      description: "Allows EventBridge to submit the monthly fine-tuning job to AWS Batch",
+    });
+
+    eventBridgeBatchRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["batch:SubmitJob"],
+        resources: [this.jobQueue.attrJobQueueArn, this.jobDefinition.attrJobDefinitionArn],
+      }),
+    );
+
+    this.monthlyScheduleRuleName = "aetherforecast-training-monthly-schedule";
+
+    // cron(0 0 ? * 1L *) = last Sunday of every month at 00:00 UTC (AWS cron:
+    // day-of-week 1=Sunday, "1L" = last occurrence of that weekday in the month).
+    // Deliberately NOT a fixed rate(28 days) — that drifts across weekdays
+    // over time instead of landing on the same calendar anchor each month.
+    this.monthlyScheduleRule = new events.CfnRule(this, "MonthlyTrainingScheduleRule", {
+      name: this.monthlyScheduleRuleName,
+      description:
+        "Triggers the AWS Batch Chronos-2 fine-tuning job on the last Sunday of every month at 00:00 UTC",
+      scheduleExpression: "cron(0 0 ? * 1L *)",
+      // Starts DISABLED — this is new, cost-incurring automation that hasn't
+      // been through a manual test run yet. Flip to "ENABLED" once you've
+      // confirmed a manual `batch submit-job` against this queue/definition
+      // succeeds end-to-end.
+      state: "DISABLED",
+      targets: [
+        {
+          id: "MonthlyFineTuneBatchTarget",
+          arn: this.jobQueue.attrJobQueueArn,
+          roleArn: eventBridgeBatchRole.roleArn,
+          batchParameters: {
+            jobDefinition: this.jobDefinition.attrJobDefinitionArn,
+            jobName: "aetherforecast-monthly-finetune",
+          },
+        },
+      ],
+    });
+
+    this.monthlyScheduleRule.addDependency(this.jobQueue);
+    this.monthlyScheduleRule.addDependency(this.jobDefinition);
   }
 }

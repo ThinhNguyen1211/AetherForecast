@@ -78,7 +78,7 @@ export class Ec2Stack extends Construct {
     this.securityGroup = new ec2.SecurityGroup(this, "BackendEc2SecurityGroup", {
       vpc: props.vpc,
       allowAllOutbound: true,
-      description: "Security group for single EC2 backend host — only CloudFront origin-facing HTTPS",
+      description: "Security group for single EC2 backend host",
     });
 
     // Allow HTTPS (443) only from CloudFront Managed Prefix List.
