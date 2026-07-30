@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import shutil
 import threading
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -28,6 +30,34 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 _model_load_lock = threading.RLock()
+
+# Short-lived TTL cache for the two S3 round-trips get_loaded_forecasting_model()
+# would otherwise make on every single /predict request: the manifest.json
+# GetObject and the ListObjectsV2 + SHA256 fingerprint check inside
+# _download_s3_prefix(). Within the TTL window, requests reuse the last
+# resolution instead of re-hitting S3; after it expires, the next request
+# re-checks, so a newly promoted model version is still picked up within
+# TTL seconds without a container restart. Not a general-purpose cache —
+# scoped to exactly these two call sites.
+_MODEL_RESOLUTION_CACHE_TTL_SECONDS = 90.0
+_model_resolution_cache_lock = threading.RLock()
+_model_resolution_cache: dict[tuple[str, str], tuple[Any, float]] = {}
+
+
+def _ttl_cached(cache_name: str, key: str, ttl_seconds: float, compute) -> Any:
+    cache_key = (cache_name, key)
+    now = time.monotonic()
+    with _model_resolution_cache_lock:
+        cached = _model_resolution_cache.get(cache_key)
+        if cached is not None and cached[1] > now:
+            return cached[0]
+
+    value = compute()
+
+    with _model_resolution_cache_lock:
+        _model_resolution_cache[cache_key] = (value, now + ttl_seconds)
+
+    return value
 
 
 @dataclass(frozen=True)
@@ -177,6 +207,33 @@ def _download_s3_prefix(
     return local_dir
 
 
+def _resolve_active_model_uri_from_manifest_cached(
+    model_s3_uri: str,
+    aws_region: str,
+    endpoint_url: str | None,
+) -> str:
+    return _ttl_cached(
+        "manifest",
+        model_s3_uri,
+        _MODEL_RESOLUTION_CACHE_TTL_SECONDS,
+        lambda: _resolve_active_model_uri_from_manifest(model_s3_uri, aws_region, endpoint_url),
+    )
+
+
+def _download_s3_prefix_cached(
+    s3_uri: str,
+    local_dir: Path,
+    aws_region: str,
+    endpoint_url: str | None,
+) -> Path:
+    return _ttl_cached(
+        "download",
+        s3_uri,
+        _MODEL_RESOLUTION_CACHE_TTL_SECONDS,
+        lambda: _download_s3_prefix(s3_uri, local_dir, aws_region, endpoint_url),
+    )
+
+
 def _resolve_model_source(
     model_s3_uri: str,
     model_cache_dir: str,
@@ -184,13 +241,13 @@ def _resolve_model_source(
     endpoint_url: str | None,
 ) -> ResolvedModelSource:
     if model_s3_uri.startswith("s3://"):
-        effective_uri = _resolve_active_model_uri_from_manifest(
+        effective_uri = _resolve_active_model_uri_from_manifest_cached(
             model_s3_uri,
             aws_region,
             endpoint_url,
         )
         local_dir = _s3_uri_to_local_dir(model_cache_dir, effective_uri)
-        downloaded_dir = _download_s3_prefix(effective_uri, local_dir, aws_region, endpoint_url)
+        downloaded_dir = _download_s3_prefix_cached(effective_uri, local_dir, aws_region, endpoint_url)
         return ResolvedModelSource(
             requested_source=model_s3_uri,
             effective_source=effective_uri,
@@ -258,7 +315,7 @@ def get_loaded_forecasting_model(
     if resolved.requested_source.startswith("s3://") and resolved.requested_source != resolved.effective_source:
         try:
             requested_local_dir = _s3_uri_to_local_dir(model_cache_dir, resolved.requested_source)
-            requested_download_dir = _download_s3_prefix(
+            requested_download_dir = _download_s3_prefix_cached(
                 resolved.requested_source,
                 requested_local_dir,
                 aws_region,
@@ -443,8 +500,10 @@ def _load_model_into_memory(
                             trust_remote_code=True,
                             **kwargs,
                         )
-                        if torch.get_num_threads() > 4:
-                            torch.set_num_threads(4)
+                        # Use the full Fargate/EC2 vCPU allocation instead of a
+                        # hardcoded 4-thread cap (os.cpu_count() reflects the
+                        # container's cgroup CPU quota).
+                        torch.set_num_threads(os.cpu_count() or 4)
 
                         logger.info("Loaded forecasting model with BaseChronosPipeline")
                         return InMemoryForecastModel(
@@ -514,8 +573,9 @@ def _load_model_into_memory(
             if tokenizer is None:
                 logger.info("Tokenizer is not available for model source %s", resolved_source)
 
-        if torch.get_num_threads() > 4:
-            torch.set_num_threads(4)
+        # Use the full Fargate/EC2 vCPU allocation instead of a hardcoded
+        # 4-thread cap (os.cpu_count() reflects the container's cgroup CPU quota).
+        torch.set_num_threads(os.cpu_count() or 4)
 
         return InMemoryForecastModel(
             model=model,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import re
@@ -218,15 +219,16 @@ class SentimentScorer:
                 self._classifier = None
                 self.mode = "simple"
 
-    def _fetch_json_score(self, url: str, score_keys: tuple[str, ...]) -> float | None:
+    async def _fetch_json_score_async(
+        self, client: httpx.AsyncClient, url: str, score_keys: tuple[str, ...]
+    ) -> float | None:
         if not url:
             return None
 
         try:
-            with httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=True) as client:
-                response = client.get(url)
-                response.raise_for_status()
-                payload = response.json()
+            response = await client.get(url)
+            response.raise_for_status()
+            payload = response.json()
 
             for key in score_keys:
                 if key in payload:
@@ -237,13 +239,12 @@ class SentimentScorer:
 
         return None
 
-    def _fetch_fear_greed_index(self) -> float | None:
+    async def _fetch_fear_greed_index_async(self, client: httpx.AsyncClient) -> float | None:
         url = "https://api.alternative.me/fng/?limit=1"
         try:
-            with httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=True) as client:
-                response = client.get(url)
-                response.raise_for_status()
-                payload = response.json()
+            response = await client.get(url)
+            response.raise_for_status()
+            payload = response.json()
 
             values = payload.get("data", [])
             if not values:
@@ -281,7 +282,9 @@ class SentimentScorer:
 
         return headlines
 
-    def _fetch_news_api_headlines(self, symbol: str, max_items: int) -> list[str]:
+    async def _fetch_news_api_headlines_async(
+        self, client: httpx.AsyncClient, symbol: str, max_items: int
+    ) -> list[str]:
         if not self.news_api_endpoint:
             return []
 
@@ -310,17 +313,18 @@ class SentimentScorer:
         params.setdefault("pageSize", max_items)
 
         try:
-            with httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=True) as client:
-                response = client.get(self.news_api_endpoint, params=params, headers=headers)
-                response.raise_for_status()
-                payload = response.json()
+            response = await client.get(self.news_api_endpoint, params=params, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
 
             return self._extract_headlines_from_payload(payload, max_items)
         except Exception as exc:
             logger.warning("News API fetch failed (%s): %s", self.news_api_endpoint, exc)
             return []
 
-    def _fetch_x_search_headlines(self, query: str, max_items: int) -> list[str]:
+    async def _fetch_x_search_headlines_async(
+        self, client: httpx.AsyncClient, query: str, max_items: int
+    ) -> list[str]:
         if not self.x_search_endpoint or not self.x_search_bearer_token:
             return []
 
@@ -328,10 +332,9 @@ class SentimentScorer:
         headers = {"Authorization": f"Bearer {self.x_search_bearer_token}"}
 
         try:
-            with httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=True) as client:
-                response = client.get(self.x_search_endpoint, params=params, headers=headers)
-                response.raise_for_status()
-                payload = response.json()
+            response = await client.get(self.x_search_endpoint, params=params, headers=headers)
+            response.raise_for_status()
+            payload = response.json()
 
             items = payload.get("data", []) if isinstance(payload, dict) else []
             if not isinstance(items, list):
@@ -368,91 +371,115 @@ class SentimentScorer:
         intensity = hits / max(1, counted)
         return float(np.tanh(intensity * 2.5))
 
-    def _collect_rss_titles(self, urls: list[str], max_items: int) -> list[str]:
-        titles: list[str] = []
-        if not urls:
+    async def _fetch_one_rss_async(self, client: httpx.AsyncClient, url: str) -> list[str]:
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+            xml_text = response.text
+
+            root = et.fromstring(xml_text)
+            titles: list[str] = []
+            for item in root.findall(".//item/title"):
+                title = (item.text or "").strip()
+                if title:
+                    titles.append(re.sub(r"\s+", " ", title))
             return titles
+        except Exception as exc:
+            logger.warning("RSS fetch failed (%s): %s", url, exc)
+            return []
+
+    async def _collect_rss_titles_async(
+        self, client: httpx.AsyncClient, urls: list[str], max_items: int
+    ) -> list[str]:
+        """Fetch every feed in `urls` concurrently; one slow/dead feed no longer
+        blocks the rest (previously a plain sequential `for url in urls` loop)."""
+        if not urls:
+            return []
+
+        per_feed_results = await asyncio.gather(*(self._fetch_one_rss_async(client, url) for url in urls))
 
         seen: set[str] = set()
-        for url in urls:
-            if len(titles) >= max_items:
-                break
-
-            try:
-                with httpx.Client(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=True) as client:
-                    response = client.get(url)
-                    response.raise_for_status()
-                    xml_text = response.text
-
-                root = et.fromstring(xml_text)
-                for item in root.findall(".//item/title"):
-                    title = (item.text or "").strip()
-                    if not title:
-                        continue
-
-                    normalized = re.sub(r"\s+", " ", title)
-                    if normalized in seen:
-                        continue
-
-                    seen.add(normalized)
-                    titles.append(normalized)
-                    if len(titles) >= max_items:
-                        break
-            except Exception as exc:
-                logger.warning("RSS fetch failed (%s): %s", url, exc)
-
+        titles: list[str] = []
+        for feed_titles in per_feed_results:
+            for title in feed_titles:
+                if title in seen:
+                    continue
+                seen.add(title)
+                titles.append(title)
+                if len(titles) >= max_items:
+                    return titles
         return titles
 
-    def _collect_news_headlines(self, max_headlines: int = 60) -> list[str]:
+    async def _collect_news_headlines_async(
+        self, client: httpx.AsyncClient, max_headlines: int = 60
+    ) -> list[str]:
+        # Configured RSS, default crypto RSS, and the news API all just
+        # contribute candidate headlines (no fallback semantics between them),
+        # so firing them concurrently is a pure speed win with no behavior risk.
+        configured_titles, default_titles, api_titles = await asyncio.gather(
+            self._collect_rss_titles_async(client, self.news_rss_urls, max_headlines),
+            self._collect_rss_titles_async(client, _DEFAULT_CRYPTO_NEWS_RSS_URLS, max_headlines),
+            self._fetch_news_api_headlines_async(client, "crypto", max_headlines),
+        )
+
+        seen: set[str] = set()
         headlines: list[str] = []
-        headlines.extend(self._collect_rss_titles(self.news_rss_urls, max_headlines))
-
-        # Also fetch from default crypto news RSS if not enough headlines
-        if len(headlines) < max_headlines:
-            crypto_rss = self._collect_rss_titles(_DEFAULT_CRYPTO_NEWS_RSS_URLS, max_headlines - len(headlines))
-            seen = {re.sub(r"\s+", " ", title).strip() for title in headlines}
-            for headline in crypto_rss:
-                normalized = re.sub(r"\s+", " ", headline).strip()
+        for group in (configured_titles, default_titles, api_titles):
+            for title in group:
+                normalized = re.sub(r"\s+", " ", title).strip()
                 if not normalized or normalized in seen:
                     continue
                 seen.add(normalized)
                 headlines.append(normalized)
                 if len(headlines) >= max_headlines:
-                    break
+                    return headlines
+        return headlines
 
-        if self.news_api_endpoint:
-            api_headlines = self._fetch_news_api_headlines("crypto", max_headlines)
-            seen = {re.sub(r"\s+", " ", title).strip() for title in headlines}
-            for headline in api_headlines:
-                normalized = re.sub(r"\s+", " ", headline).strip()
-                if not normalized or normalized in seen:
-                    continue
-                seen.add(normalized)
-                headlines.append(normalized)
-                if len(headlines) >= max_headlines:
-                    break
-
-        return headlines[:max_headlines]
-
-    def _collect_geopolitical_headlines(self, max_headlines: int = 20) -> list[str]:
+    async def _resolve_geo_signal_async(
+        self, client: httpx.AsyncClient, max_headlines: int = 20
+    ) -> tuple[float | None, list[str]]:
+        direct_score = await self._fetch_json_score_async(
+            client,
+            self.geopolitical_sentiment_endpoint or "",
+            score_keys=("score", "sentiment", "sentiment_score"),
+        )
+        if direct_score is not None:
+            return direct_score, []
         if self.geopolitical_sentiment_endpoint:
-            return []
-        return self._collect_rss_titles(_DEFAULT_GEOPOLITICAL_RSS_URLS, max_headlines)
+            # Endpoint was configured but failed — do not fall back to RSS
+            # scraping, matching the original sync behavior.
+            return None, []
 
-    def _collect_x_headlines(self, symbol: str, max_items: int = 40) -> list[str]:
+        headlines = await self._collect_rss_titles_async(client, _DEFAULT_GEOPOLITICAL_RSS_URLS, max_headlines)
+        if headlines:
+            return self._headline_keyword_score(headlines), headlines
+        return None, []
+
+    async def _resolve_x_signal_async(
+        self, client: httpx.AsyncClient, symbol: str, max_items: int = 40
+    ) -> tuple[float | None, list[str]]:
+        direct_score = await self._fetch_json_score_async(
+            client,
+            self.x_sentiment_endpoint or "",
+            score_keys=("score", "sentiment", "sentiment_score"),
+        )
+        if direct_score is not None:
+            return direct_score, []
         if self.x_sentiment_endpoint:
-            return []
+            # Endpoint was configured but failed — do not fall back to nitter
+            # scraping, matching the original sync behavior.
+            return None, []
 
         symbol_token = symbol.upper().replace("USDT", "").replace("USD", "")
         topics = [symbol_token or symbol.upper(), *_DEFAULT_X_TOPICS]
         if self.event_keywords:
             topics.extend(self.event_keywords[:6])
 
-        headlines: list[str] = []
+        # _DEFAULT_X_TOPICS is a static non-empty list, so x_query is always
+        # truthy in practice; _fetch_x_search_headlines_async already no-ops
+        # safely if the search endpoint/token aren't configured.
         x_query = self.x_search_query or " OR ".join(sorted(set(topics)))
-        if x_query:
-            x_query = f"{x_query} lang:en"
-            headlines.extend(self._fetch_x_search_headlines(x_query, max_items))
+        search_query = f"{x_query} lang:en" if x_query else ""
 
         urls: list[str] = []
         for topic in topics:
@@ -460,7 +487,12 @@ class SentimentScorer:
             for template in _DEFAULT_X_RSS_SOURCES:
                 urls.append(template.format(query=query))
 
-        rss_titles = self._collect_rss_titles(urls, max_items)
+        search_headlines, rss_titles = await asyncio.gather(
+            self._fetch_x_search_headlines_async(client, search_query, max_items),
+            self._collect_rss_titles_async(client, urls, max_items),
+        )
+
+        headlines = list(search_headlines)
         if headlines:
             seen = {re.sub(r"\s+", " ", title).strip() for title in headlines}
             for title in rss_titles:
@@ -471,9 +503,12 @@ class SentimentScorer:
                 headlines.append(normalized)
                 if len(headlines) >= max_items:
                     break
-            return headlines[:max_items]
+        else:
+            headlines = rss_titles
 
-        return rss_titles
+        if headlines:
+            return self._headline_keyword_score(headlines), headlines
+        return None, []
 
     def _headline_keyword_score(self, headlines: list[str]) -> float:
         if not headlines:
@@ -539,11 +574,29 @@ class SentimentScorer:
             if cached is not None:
                 return cached
 
+        # All independent external fetches (Fear&Greed, news RSS/API, X,
+        # geopolitical) run concurrently via asyncio.gather inside
+        # _gather_external_signals_async — previously each ran sequentially,
+        # so the total latency was the SUM of every source's round-trip
+        # instead of the MAX of the slowest one.
+        #
+        # asyncio.run() is safe here because this method is only ever reached
+        # from FastAPI's sync (non-`async def`) /predict route, which
+        # Starlette executes in a plain worker thread via run_in_threadpool —
+        # there is no event loop already running on that thread. If this call
+        # chain is ever converted to `async def` end-to-end, replace this with
+        # a plain `await self._gather_external_signals_async(...)`.
+        (
+            fear_greed_index,
+            headlines,
+            (x_score, x_headlines),
+            (geopolitics_score, geo_headlines),
+        ) = asyncio.run(self._gather_external_signals_async(normalized_symbol))
+
         weighted_total = 0.0
         weight_sum = 0.0
         sources: list[str] = []
 
-        fear_greed_index = self._fetch_fear_greed_index()
         if fear_greed_index is not None:
             fear_greed_score = (fear_greed_index - 50.0) / 50.0
             weighted_total += fear_greed_score * 0.25
@@ -552,7 +605,6 @@ class SentimentScorer:
         else:
             fear_greed_index = 50.0
 
-        headlines = self._collect_news_headlines()
         news_score = 0.0
         if headlines:
             news_score = self._headline_keyword_score(headlines)
@@ -581,15 +633,9 @@ class SentimentScorer:
                 except Exception as exc:
                     logger.warning("HF news sentiment inference failed: %s", exc)
 
-        x_headlines: list[str] = []
-        x_score = self._fetch_json_score(
-            self.x_sentiment_endpoint or "",
-            score_keys=("score", "sentiment", "sentiment_score"),
-        )
-        if x_score is None:
-            x_headlines = self._collect_x_headlines(normalized_symbol)
-            if x_headlines:
-                x_score = self._headline_keyword_score(x_headlines)
+        # x_score/x_headlines and geopolitics_score/geo_headlines were already
+        # resolved (direct endpoint preferred, RSS fallback only if
+        # unconfigured) inside _gather_external_signals_async above.
         if x_score is not None:
             weighted_total += x_score * 0.20
             weight_sum += 0.20
@@ -597,15 +643,6 @@ class SentimentScorer:
         else:
             x_score = 0.0
 
-        geo_headlines: list[str] = []
-        geopolitics_score = self._fetch_json_score(
-            self.geopolitical_sentiment_endpoint or "",
-            score_keys=("score", "sentiment", "sentiment_score"),
-        )
-        if geopolitics_score is None:
-            geo_headlines = self._collect_geopolitical_headlines()
-            if geo_headlines:
-                geopolitics_score = self._headline_keyword_score(geo_headlines)
         if geopolitics_score is not None:
             weighted_total += geopolitics_score * 0.20
             weight_sum += 0.20
@@ -648,6 +685,23 @@ class SentimentScorer:
         )
 
         return snapshot
+
+    async def _gather_external_signals_async(
+        self, normalized_symbol: str
+    ) -> tuple[float | None, list[str], tuple[float | None, list[str]], tuple[float | None, list[str]]]:
+        """Fire Fear&Greed, news, X, and geopolitical sentiment fetches concurrently.
+
+        Returns (fear_greed_index, headlines, (x_score, x_headlines),
+        (geopolitics_score, geo_headlines)) — the same raw ingredients the
+        original sequential implementation computed one at a time.
+        """
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), follow_redirects=True) as client:
+            return await asyncio.gather(
+                self._fetch_fear_greed_index_async(client),
+                self._collect_news_headlines_async(client),
+                self._resolve_x_signal_async(client, normalized_symbol),
+                self._resolve_geo_signal_async(client),
+            )
 
     def _compute_external_score(self, symbol: str, force_refresh: bool = False) -> tuple[float, str]:
         snapshot = self._compute_external_snapshot(symbol, force_refresh=force_refresh)
