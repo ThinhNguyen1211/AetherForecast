@@ -101,8 +101,8 @@ export class MlBatchStack extends Construct {
       .selectSubnets({ subnetType: ec2.SubnetType.PUBLIC })
       .subnetIds;
 
-    this.computeEnvironment = new batch.CfnComputeEnvironment(this, "TrainingSpotComputeEnvironment", {
-      computeEnvironmentName: "aetherforecast-training-ce-spot",
+    this.computeEnvironment = new batch.CfnComputeEnvironment(this, "TrainingSpotComputeEnvironmentV2", {
+      computeEnvironmentName: "aetherforecast-training-ce-spot-v2",
       type: "MANAGED",
       serviceRole: batchServiceRole.roleArn,
       state: "ENABLED",

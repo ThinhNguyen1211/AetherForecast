@@ -196,8 +196,8 @@ export class MonitoringStack extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.BREACHING,
     });
 
-    const cronUnhealthyAlarm = new cloudwatch.Alarm(this, "CronUnhealthyAlarm", {
-      alarmName: "aetherforecast-cron-unhealthy",
+    const cronUnhealthyAlarm = new cloudwatch.Alarm(this, "CronUnhealthyAlarmV2", {
+      alarmName: "aetherforecast-cron-unhealthy-v2",
       alarmDescription: "Host cron health metric is unhealthy",
       metric: cronHealthyMetric,
       threshold: 1,
@@ -207,8 +207,8 @@ export class MonitoringStack extends Construct {
       treatMissingData: cloudwatch.TreatMissingData.BREACHING,
     });
 
-    const cronStaleAlarm = new cloudwatch.Alarm(this, "CronStaleAlarm", {
-      alarmName: "aetherforecast-cron-last-success-stale",
+    const cronStaleAlarm = new cloudwatch.Alarm(this, "CronStaleAlarmV2", {
+      alarmName: "aetherforecast-cron-last-success-stale-v2",
       alarmDescription: "Last successful cron run is stale",
       metric: cronLastSuccessAgeMetric,
       threshold: 1800,
