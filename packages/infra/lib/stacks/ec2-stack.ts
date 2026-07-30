@@ -87,7 +87,7 @@ export class Ec2Stack extends Construct {
       ec2.PrefixList.fromPrefixListId(
         this,
         "CloudFrontPrefixList",
-        "pl-3b927c52", // com.amazonaws.global.cloudfront.origin-facing
+        "pl-31a34658", // com.amazonaws.global.cloudfront.origin-facing (ap-southeast-1)
       ).prefixListId,
     );
 
