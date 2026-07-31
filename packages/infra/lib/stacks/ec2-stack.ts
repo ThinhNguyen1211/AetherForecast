@@ -24,7 +24,7 @@ export class Ec2Stack extends Construct {
 
     const backendImageUriParam = new CfnParameter(this, "BackendImageUri", {
       type: "String",
-      default: "ghcr.io/aetherforecast/backend:latest",
+      default: "800762439372.dkr.ecr.ap-southeast-1.amazonaws.com/aetherforecast/backend:latest",
       description: "Container image URI for backend (must include Caddy + FastAPI).",
     });
     backendImageUriParam.overrideLogicalId("BackendImageUri");

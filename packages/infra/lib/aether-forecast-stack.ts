@@ -8,7 +8,6 @@ import { MlBatchStack } from "./stacks/ml-batch-stack";
 import { MonitoringStack } from "./stacks/monitoring-stack";
 import { NetworkStack } from "./stacks/network-stack";
 import { StorageStack } from "./stacks/storage-stack";
-import { TrainingEc2Stack } from "./stacks/training-ec2-stack";
 
 export class AetherForecastStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
@@ -41,13 +40,6 @@ export class AetherForecastStack extends Stack {
       mlModelBucket: storage.mlModelBucket,
       cognitoUserPoolId: auth.userPool.userPoolId,
       cognitoClientId: auth.userPoolClient.userPoolClientId,
-    });
-
-    const trainingEc2 = new TrainingEc2Stack(this, "TrainingEc2Stack", {
-      vpc: network.vpc,
-      trainingRepository: registries.trainingRepository,
-      parquetDataBucket: storage.parquetDataBucket,
-      mlModelBucket: storage.mlModelBucket,
     });
 
     const mlBatch = new MlBatchStack(this, "MlBatchStack", {
@@ -93,22 +85,6 @@ export class AetherForecastStack extends Stack {
 
     new CfnOutput(this, "BackendEc2LogGroupName", {
       value: ec2Backend.backendLogGroup.logGroupName,
-    });
-
-    new CfnOutput(this, "TrainingEc2InstanceId", {
-      value: trainingEc2.instance.instanceId,
-    });
-
-    new CfnOutput(this, "TrainingEc2ElasticIp", {
-      value: trainingEc2.elasticIp.ref,
-    });
-
-    new CfnOutput(this, "TrainingEc2SecurityGroupId", {
-      value: trainingEc2.securityGroup.securityGroupId,
-    });
-
-    new CfnOutput(this, "TrainingEc2LogGroupName", {
-      value: trainingEc2.trainingLogGroup.logGroupName,
     });
 
     new CfnOutput(this, "BatchJobQueueArn", {
