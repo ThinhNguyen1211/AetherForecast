@@ -254,6 +254,27 @@ def risk_manager_node(state: CouncilState) -> CouncilState:
     }
 
 
+def _log_mock_binance_execution(decision: AiCouncilDecision, market: MarketContext) -> None:
+    """Log a simulated Binance Futures Testnet order — no real HTTP call is made.
+
+    Every value below is a hardcoded, obviously-fake placeholder, not a real
+    credential. This exists to demonstrate where a genuine exchange execution
+    call would be wired in, without requiring real exchange API keys or
+    risking real funds in this repo.
+    """
+    side = "BUY" if decision.action == TradeAction.LONG else "SELL"
+    mock_payload = {
+        "symbol": market.symbol,
+        "side": side,
+        "type": "MARKET",
+        "quantity": decision.position_size_pct,
+        "TESTNET_API_KEY": "MOCK-TESTNET-API-KEY-0000000000000000000000000000000000000000",
+        "TESTNET_API_SECRET": "MOCK-TESTNET-API-SECRET-0000000000000000000000000000000000000000",
+        "HMAC_SHA256_SIGNATURE": "MOCK-SIGNATURE-deadbeefcafebabe0000000000000000000000000000000000000000000000",
+    }
+    logger.info("[MOCK BINANCE TESTNET EXECUTION] Payload: %s", mock_payload)
+
+
 def execution_judge_node(state: CouncilState) -> CouncilState:
     """Synthesize everything into a final AiCouncilDecision."""
     market = state["market"]
@@ -307,6 +328,9 @@ def execution_judge_node(state: CouncilState) -> CouncilState:
     agent = _execution_judge_agent(llm)
     raw = _run_agent(agent, prompt)
     decision = _parse_trade_decision(raw)
+
+    if decision.action in (TradeAction.LONG, TradeAction.SHORT):
+        _log_mock_binance_execution(decision, market)
 
     return {
         **state,

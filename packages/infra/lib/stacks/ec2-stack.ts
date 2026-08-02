@@ -17,6 +17,7 @@ export class Ec2Stack extends Construct {
   public readonly instance: ec2.Instance;
   public readonly securityGroup: ec2.SecurityGroup;
   public readonly elasticIp: ec2.CfnEIP;
+  public readonly eipAssociation: ec2.CfnEIPAssociation;
   public readonly backendLogGroup: logs.LogGroup;
 
   constructor(scope: Construct, id: string, props: Ec2StackProps) {
@@ -81,20 +82,25 @@ export class Ec2Stack extends Construct {
       description: "Security group for single EC2 backend host",
     });
 
-    // Allow HTTPS (443) only from CloudFront Managed Prefix List.
-    // No port 22 (use SSM Session Manager), no port 80 (Caddy redirects internally).
-    const cfPrefixList = ec2.Peer.prefixList(
-      ec2.PrefixList.fromPrefixListId(
-        this,
-        "CloudFrontPrefixList",
-        "pl-31a34658", // com.amazonaws.global.cloudfront.origin-facing (ap-southeast-1)
-      ).prefixListId,
+    // Direct internet access on 80/443 is intentionally kept open for now.
+    // CloudFront now also fronts api.aetherforcast.io.vn (see ApiCdnStack),
+    // but locking this down to CloudFront's prefix list is deliberately
+    // deferred: Let's Encrypt's ACME validators are not in CloudFront's
+    // prefix list, so Caddy's cert renewal would break the same way it did
+    // recently. Revisit once an ALB-with-ACM or DNS-01 mechanism replaces
+    // Caddy's public-reachability-dependent renewal. No port 22 (use SSM
+    // Session Manager instead — AmazonSSMManagedInstanceCore is attached
+    // below).
+    this.securityGroup.addIngressRule(
+      ec2.Peer.anyIpv4(),
+      ec2.Port.tcp(443),
+      "HTTPS - direct browser/WS traffic and Caddy ACME renewal (temporary, pending TLS mechanism decision)",
     );
 
     this.securityGroup.addIngressRule(
-      cfPrefixList,
-      ec2.Port.tcp(443),
-      "Allow HTTPS from CloudFront origin-facing prefix list only",
+      ec2.Peer.anyIpv4(),
+      ec2.Port.tcp(80),
+      "HTTP - Caddy ACME HTTP-01 challenge (temporary, pending TLS mechanism decision)",
     );
 
     this.backendLogGroup = new logs.LogGroup(this, "Ec2BackendLogGroup", {
@@ -238,7 +244,7 @@ export class Ec2Stack extends Construct {
       domain: "vpc",
     });
 
-    new ec2.CfnEIPAssociation(this, "BackendEipAssociation", {
+    this.eipAssociation = new ec2.CfnEIPAssociation(this, "BackendEipAssociation", {
       allocationId: this.elasticIp.attrAllocationId,
       instanceId: this.instance.instanceId,
     });
