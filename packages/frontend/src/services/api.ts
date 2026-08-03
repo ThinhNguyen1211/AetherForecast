@@ -346,11 +346,12 @@ export async function fetchChart(
   return [];
 }
 
-// REST calls to api.binance.com/fapi.binance.com from the browser were being
-// blocked by some corporate firewalls/AV proxies (CORS preflight interception).
-// Binance's public WS streams are unauthenticated and not subject to the same
-// preflight, so ticker/mark-price data is now pushed over a live connection
-// instead of polled.
+// Direct browser-to-Binance WS connections hit a hard 403 (Binance's/the
+// corporate network's WAF rejecting the handshake). Routed through our own
+// backend instead — BinanceRealtimeHub (packages/backend/src/realtime/websocket.py)
+// multiplexes exactly ONE upstream Binance connection per symbol across every
+// subscribed frontend client, so this doesn't turn into 1 upstream connection
+// per browser tab.
 
 export interface BinanceSpotTickerMessage {
   lastPrice: number;
@@ -363,24 +364,30 @@ export function connectBinanceSpotTicker(
   onMessage: (message: BinanceSpotTickerMessage) => void,
   onError?: () => void,
 ): WebSocket {
-  // Default port (443), not :9443 — some corporate firewalls filter non-standard
-  // outbound ports regardless of protocol. Binance documents both as valid;
-  // this is the more firewall-friendly form. Symbol IS already lowercased below
-  // (Binance stream names are case-sensitive lowercase).
-  const socket = new WebSocket(`wss://stream.binance.com/ws/${symbol.toLowerCase()}@ticker`);
+  const wsBase = resolveWebSocketBaseUrl();
+  const socket = new WebSocket(`${wsBase}/ws/ticker/${symbol.toUpperCase()}`);
 
   socket.onmessage = (event) => {
     try {
-      const payload = JSON.parse(event.data) as { c?: string; p?: string; P?: string };
-      const lastPrice = Number(payload.c);
-      const changePercent = Number(payload.P);
+      const payload = JSON.parse(event.data) as {
+        event?: string;
+        last_price?: number;
+        price_change?: number;
+        change_percent?: number;
+      };
+      if (payload.event !== "ticker") {
+        return;
+      }
+
+      const lastPrice = Number(payload.last_price);
+      const changePercent = Number(payload.change_percent);
       if (!Number.isFinite(lastPrice) || !Number.isFinite(changePercent)) {
         return;
       }
 
       onMessage({
         lastPrice,
-        priceChange: Number(payload.p) || 0,
+        priceChange: Number(payload.price_change) || 0,
         changePercent,
       });
     } catch {
@@ -405,19 +412,28 @@ export function connectBinanceFuturesMarkPrice(
   onMessage: (message: BinanceMarkPriceMessage) => void,
   onError?: () => void,
 ): WebSocket {
-  const socket = new WebSocket(`wss://fstream.binance.com/ws/${symbol.toLowerCase()}@markPrice@1s`);
+  const wsBase = resolveWebSocketBaseUrl();
+  const socket = new WebSocket(`${wsBase}/ws/mark-price/${symbol.toUpperCase()}`);
 
   socket.onmessage = (event) => {
     try {
-      const payload = JSON.parse(event.data) as { p?: string; r?: string };
-      const markPrice = Number(payload.p);
+      const payload = JSON.parse(event.data) as {
+        event?: string;
+        mark_price?: number;
+        funding_rate?: number;
+      };
+      if (payload.event !== "mark_price") {
+        return;
+      }
+
+      const markPrice = Number(payload.mark_price);
       if (!Number.isFinite(markPrice)) {
         return;
       }
 
       onMessage({
         markPrice,
-        fundingRate: Number(payload.r) || 0,
+        fundingRate: Number(payload.funding_rate) || 0,
       });
     } catch {
       // Ignore malformed frames.

@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     symbols_source: str = "binance"
     binance_base_url: str = "https://api.binance.com"
     binance_ws_url: str = "wss://stream.binance.com:9443"
+    binance_futures_ws_url: str = "wss://fstream.binance.com"
     realtime_kline_interval: str = "1m"
 
     fetch_concurrency: int = 32
