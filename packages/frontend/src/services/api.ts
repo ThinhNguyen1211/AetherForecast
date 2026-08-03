@@ -363,7 +363,11 @@ export function connectBinanceSpotTicker(
   onMessage: (message: BinanceSpotTickerMessage) => void,
   onError?: () => void,
 ): WebSocket {
-  const socket = new WebSocket(`wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@ticker`);
+  // Default port (443), not :9443 — some corporate firewalls filter non-standard
+  // outbound ports regardless of protocol. Binance documents both as valid;
+  // this is the more firewall-friendly form. Symbol IS already lowercased below
+  // (Binance stream names are case-sensitive lowercase).
+  const socket = new WebSocket(`wss://stream.binance.com/ws/${symbol.toLowerCase()}@ticker`);
 
   socket.onmessage = (event) => {
     try {
