@@ -11,6 +11,8 @@ import logging
 
 import httpx
 
+from src.core.config import get_settings
+
 logger = logging.getLogger(__name__)
 
 _FEAR_GREED_URL = "https://api.alternative.me/fng/"
@@ -92,5 +94,60 @@ async def fetch_funding_rate(symbol: str) -> float:
             exc,
         )
         return _DEFAULT_FUNDING_RATE
+
+
+async def fetch_latest_klines(
+    symbol: str,
+    timeframe: str,
+    limit: int = 50,
+) -> list[dict[str, float]]:
+    """Fetch the most recent klines directly from Binance's public REST API.
+
+    Same endpoint (/api/v3/klines) and base URL as the ingestion pipeline
+    (src/data/fetcher.py), so results are consistent with what the model was
+    trained on. Returns OHLCV dicts oldest-first, or an empty list on any
+    failure — the caller decides how to treat "no live data available".
+    """
+    settings = get_settings()
+    normalized_symbol = symbol.upper().strip()
+    if not normalized_symbol:
+        return []
+
+    url = f"{settings.binance_base_url.rstrip('/')}/api/v3/klines"
+
+    try:
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+            response = await client.get(
+                url,
+                params={"symbol": normalized_symbol, "interval": timeframe, "limit": limit},
+            )
+            response.raise_for_status()
+            rows = response.json()
+
+        if not isinstance(rows, list):
+            logger.warning("Unexpected Binance klines response shape for %s: %s", normalized_symbol, rows)
+            return []
+
+        return [
+            {
+                "timestamp": row[0],
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": float(row[5]),
+            }
+            for row in rows
+        ]
+    except httpx.TimeoutException:
+        logger.warning(
+            "Binance klines API timed out after %ss for %s",
+            _REQUEST_TIMEOUT.read,
+            normalized_symbol,
+        )
+        return []
+    except Exception as exc:
+        logger.warning("Failed to fetch real-time klines for %s: %s", normalized_symbol, exc)
+        return []
 
 

@@ -1,13 +1,18 @@
 """POST /api/ai/analyze — LangGraph cyclic AI Council debate (SSE streaming).
 
-Pulls latest candles + Chronos-2 forecast + sentiment for the given symbol,
-then runs the 4-agent LangGraph debate pipeline:
+Reuses the ML forecast + sentiment the client already computed via a prior
+POST /predict call (the UI requires a prediction before AI Council is
+reachable, so re-running Chronos-2 and re-fetching S3 candle history here
+would be pure duplicate work). Only genuinely time-sensitive data is fetched
+fresh: the current market price (real-time Binance klines) and funding
+rate/Fear-Greed Index (not present on PredictResponse). Runs the 4-agent
+LangGraph debate pipeline:
     Quant Analyst → Devil's Advocate → Risk Manager → Execution Judge.
 The Devil's Advocate can force the Quant Analyst to re-evaluate if severe
 contradictions are found (capped to prevent infinite loops).
 Streams agent thoughts and debate logs in real-time via Server-Sent Events.
 Final event contains [FINAL_RESULT]:<AiCouncilDecision JSON>.
-Rate limited to 5 requests per hour per IP.
+Rate limited to 20 requests per hour per IP.
 """
 
 import asyncio
@@ -24,22 +29,19 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from src.dependencies.cognito import require_authenticated_user
-from src.dependencies.s3_client import S3ParquetClient, get_s3_parquet_client
 from src.ml.agents.crew import (
     MarketContext,
     RiskProfile,
 )
 from src.ml.agents.graph_council import run_graph_council_streaming
-from src.ml.inference import ForecastInferenceService, get_inference_service
-from src.ml.schemas import Candle, PredictRequest
-from src.services.external_data import fetch_fear_greed, fetch_funding_rate
+from src.ml.schemas import PredictResponse
+from src.services.external_data import fetch_fear_greed, fetch_funding_rate, fetch_latest_klines
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai-council"])
 limiter = Limiter(key_func=get_remote_address)
 
-_HISTORY_LIMIT = 1500
-_FORECAST_HORIZON = 24
+_REALTIME_KLINES_LIMIT = 50
 
 
 def _sse_error(event: str) -> str:
@@ -56,7 +58,12 @@ def _error_stream(message: str, exc: Exception | None = None) -> Generator[str, 
 
 
 class AiAnalyzeRequest(BaseModel):
-    """POST /api/ai/analyze request body."""
+    """POST /api/ai/analyze request body.
+
+    `prediction` is the PredictResponse the client already received from a
+    prior POST /predict call — the AI Council reuses its forecast and
+    sentiment instead of recomputing them.
+    """
 
     symbol: str = Field(description="Trading pair e.g. BTCUSDT")
     timeframe: str = Field(default="1h")
@@ -68,6 +75,9 @@ class AiAnalyzeRequest(BaseModel):
         default="vi",
         description="Language for the final reasoning field: en (English) or vi (Vietnamese)",
     )
+    prediction: PredictResponse = Field(
+        description="The PredictResponse from a prior POST /predict call for this symbol/timeframe"
+    )
 
 
 # Force Pydantic V2 to fully resolve this model before FastAPI builds the
@@ -76,90 +86,71 @@ AiAnalyzeRequest.model_rebuild()
 
 
 @router.post("/analyze")
-@limiter.limit("5/hour")
+@limiter.limit("20/hour")
 async def ai_analyze(
     request: Request,
     payload: AiAnalyzeRequest = Body(...),
     _claims: dict = Depends(require_authenticated_user),
-    inference_service: ForecastInferenceService = Depends(get_inference_service),
-    s3_client: S3ParquetClient = Depends(get_s3_parquet_client),
 ) -> StreamingResponse:
     """Run the LangGraph 4-agent cyclic council on the current market state.
 
-    Returns Server-Sent Events stream with agent reasoning, Devil's Advocate
-    debate logs, and the final decision in real-time. Any exception before or
-    during streaming is converted into an SSE error event so the browser
-    receives CORS headers and the real error message instead of a bare 500.
+    Reuses payload.prediction instead of re-running Chronos-2 inference or
+    re-fetching S3 candle history — only the current price (real-time
+    Binance klines) and funding rate/Fear-Greed Index are fetched fresh,
+    since those aren't part of a PredictResponse. Returns a Server-Sent
+    Events stream with agent reasoning, Devil's Advocate debate logs, and the
+    final decision in real-time. Any exception before or during streaming is
+    converted into an SSE error event so the browser receives CORS headers
+    and the real error message instead of a bare 500.
     """
     symbol = payload.symbol.upper().strip()
     timeframe = payload.timeframe or "1h"
+    prediction = payload.prediction
+
+    if prediction.symbol.upper().strip() != symbol or prediction.timeframe != timeframe:
+        return StreamingResponse(
+            _error_stream(
+                f"Prediction context ({prediction.symbol}/{prediction.timeframe}) does not match "
+                f"the requested analysis ({symbol}/{timeframe}) — regenerate the prediction and retry."
+            ),
+            media_type="text/event-stream",
+        )
 
     try:
-        # --- Step 1: Pull latest candles from backend data sources ---
+        # --- Step 1: Fetch the current market price directly from Binance (real-time, never mocked) ---
         try:
-            raw_candles = s3_client.fetch_chart_points(
-                symbol=symbol,
-                timeframe=timeframe,
-                limit=_HISTORY_LIMIT,
-                use_cache=False,
-            )
+            recent_klines = await fetch_latest_klines(symbol, timeframe, limit=_REALTIME_KLINES_LIMIT)
         except Exception as exc:
-            logger.warning("Failed to fetch candles for AI analysis: %s", exc)
+            logger.warning("Failed to fetch real-time klines for AI analysis: %s", exc)
+            recent_klines = []
+
+        if len(recent_klines) < 5:
             return StreamingResponse(
-                _error_stream(f"Cannot fetch market data for {symbol}"),
+                _error_stream(f"Cannot fetch real-time market data for {symbol}"),
                 media_type="text/event-stream",
             )
 
-        if len(raw_candles) < 30:
-            return StreamingResponse(
-                _error_stream(
-                    f"Insufficient candle data for {symbol} ({len(raw_candles)} candles)"
-                ),
-                media_type="text/event-stream",
-            )
-
-        # --- Step 2: Run Chronos-2 forecast ---
-        try:
-            predict_request = PredictRequest(
-                symbol=symbol,
-                timeframe=timeframe,
-                latest_candles=[Candle(**item) for item in raw_candles],
-                horizon=_FORECAST_HORIZON,
-                quantiles=[0.05, 0.5, 0.95],
-                sentiment_score=None,
-            )
-            forecast = inference_service.predict(predict_request)
-        except Exception as exc:
-            logger.warning("Chronos-2 forecast failed for AI analysis: %s", exc)
-            return StreamingResponse(
-                _error_stream("Forecast model unavailable", exc),
-                media_type="text/event-stream",
-            )
-
-        # --- Step 3: Fetch real external market data (never mocked) ---
+        # --- Step 2: Fetch real external market data not covered by the prediction (never mocked) ---
         fear_greed_index, funding_rate = await asyncio.gather(
             fetch_fear_greed(),
             fetch_funding_rate(symbol),
         )
 
-        # --- Step 4: Build MarketContext from forecast + candles + real data ---
-        closes = np.array([c["close"] for c in raw_candles[-50:]], dtype=np.float64)
+        # --- Step 3: Build MarketContext from real-time price + the client-supplied ML forecast/sentiment ---
+        closes = np.array([c["close"] for c in recent_klines], dtype=np.float64)
         log_returns = np.diff(np.log(np.maximum(closes, 1e-8)))
         realized_vol = float(np.std(log_returns)) if len(log_returns) > 2 else 0.01
 
-        current_price = float(raw_candles[-1]["close"])
-        forecast_median = forecast.predicted_price
-        forecast_lower = forecast.confidence_interval.lower
-        forecast_upper = forecast.confidence_interval.upper
+        current_price = float(recent_klines[-1]["close"])
 
         market_context = MarketContext(
             symbol=symbol,
             current_price=current_price,
-            forecast_median=forecast_median,
-            forecast_lower=forecast_lower,
-            forecast_upper=forecast_upper,
+            forecast_median=prediction.predicted_price,
+            forecast_lower=prediction.confidence_interval.lower,
+            forecast_upper=prediction.confidence_interval.upper,
             realized_volatility=realized_vol,
-            sentiment_score=forecast.sentiment_score,
+            sentiment_score=prediction.sentiment_score,
             funding_rate=funding_rate,
             fear_greed_index=fear_greed_index,
             timeframe=timeframe,
@@ -167,8 +158,12 @@ async def ai_analyze(
             language=payload.language,
         )
 
-        # --- Step 5: Stream LangGraph debate council via SSE ---
-        logger.info("Starting LangGraph AI council debate for %s @ %s", symbol, timeframe)
+        # --- Step 4: Stream LangGraph debate council via SSE ---
+        logger.info(
+            "Starting LangGraph AI council debate for %s @ %s (reusing client-supplied prediction)",
+            symbol,
+            timeframe,
+        )
         return StreamingResponse(
             run_graph_council_streaming(market_context),
             media_type="text/event-stream",

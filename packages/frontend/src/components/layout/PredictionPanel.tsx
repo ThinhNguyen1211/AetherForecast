@@ -156,7 +156,7 @@ export default function PredictionPanel({
       </button>
 
       <div className="mb-3">
-        <AiCouncilPanel symbol={symbol} timeframe={timeframe} hasPrediction={prediction !== null} riskProfile={riskProfile} />
+        <AiCouncilPanel symbol={symbol} timeframe={timeframe} prediction={prediction} riskProfile={riskProfile} />
       </div>
 
       {loading && predictionProgress.length > 0 && (

@@ -89,14 +89,20 @@ if decision.action in (TradeAction.LONG, TradeAction.SHORT):
 
 ### 3.1. AI Council Workflow (Multi-Agent System)
 
-**Điểm vào**: `POST /api/ai/analyze` — `packages/backend/src/routers/ai_council.py`, hàm `ai_analyze()`. Giới hạn `5 requests/giờ` theo IP (`@limiter.limit("5/hour")`), yêu cầu xác thực Cognito.
+**Điểm vào**: `POST /api/ai/analyze` — `packages/backend/src/routers/ai_council.py`, hàm `ai_analyze()`. Giới hạn `20 requests/giờ` theo IP (`@limiter.limit("20/hour")`), yêu cầu xác thực Cognito.
+
+**Kiến trúc đã tối ưu (không còn tự chạy lại ML/S3)**: vì giao diện đã bắt buộc người dùng bấm "Generate prediction" trước khi mở khóa AI Council, request body (`AiAnalyzeRequest`) giờ nhận thẳng trường `prediction: PredictResponse` — chính là kết quả `POST /predict` mà client đã có sẵn. Endpoint **không còn**:
+- Đọc lại candle từ S3 (`s3_client.fetch_chart_points`) — đã xóa hoàn toàn.
+- Tự chạy lại Chronos-2 (`inference_service.predict`) — đã xóa hoàn toàn.
 
 Luồng xử lý trong `ai_analyze()`:
-1. **Lấy dữ liệu nến**: `s3_client.fetch_chart_points(...)` — đọc dữ liệu nến (candle) mới nhất từ Parquet trên S3.
-2. **Chạy dự báo Chronos-2**: `inference_service.predict(predict_request)` (xem chi tiết ở mục 3.2).
-3. **Lấy dữ liệu thị trường thật** (không mock): `asyncio.gather(fetch_fear_greed(), fetch_funding_rate(symbol))` — từ `src/services/external_data.py`.
-4. **Xây dựng `MarketContext`** (Pydantic model, định nghĩa tại `src/ml/agents/crew.py`): gộp forecast + nến + dữ liệu thật ở bước 3.
-5. **Chạy debate LangGraph theo dạng streaming**: `run_graph_council_streaming(market_context)` — trả về `StreamingResponse` (Server-Sent Events).
+1. **Kiểm tra khớp ngữ cảnh**: nếu `prediction.symbol`/`prediction.timeframe` không khớp với `symbol`/`timeframe` của chính request đó, trả lỗi ngay (tránh trường hợp client gửi nhầm prediction cũ của symbol khác).
+2. **Lấy giá thị trường real-time trực tiếp từ Binance**: `fetch_latest_klines(symbol, timeframe, limit=50)` (hàm mới trong `src/services/external_data.py`, gọi thẳng `GET {binance_base_url}/api/v3/klines` — cùng endpoint mà pipeline ingestion `src/data/fetcher.py` dùng, nên nhất quán với dữ liệu model đã được train). Giá đóng cửa mới nhất → `current_price`; toàn bộ batch klines này cũng dùng để tính `realized_volatility` (thay cho việc tính từ candle S3 trước đây).
+3. **Lấy dữ liệu thật KHÔNG có trong `PredictResponse`**: `asyncio.gather(fetch_fear_greed(), fetch_funding_rate(symbol))`. Hai giá trị này (Fear/Greed Index, funding rate) là trường riêng của `MarketContext`, không tồn tại trong schema `PredictResponse`, nên vẫn phải fetch mới — không phải sự dư thừa.
+4. **Xây dựng `MarketContext`**: `current_price`/`realized_volatility` từ bước 2, `forecast_median`/`forecast_lower`/`forecast_upper`/`sentiment_score` lấy thẳng từ `payload.prediction` (không tính toán lại), `funding_rate`/`fear_greed_index` từ bước 3. **Lưu ý**: `MarketContext` (định nghĩa tại `src/ml/agents/crew.py`) không cần sửa schema — các trường sẵn có đã đủ để chứa toàn bộ dữ liệu từ nguồn mới.
+5. **Chạy debate LangGraph theo dạng streaming**: `run_graph_council_streaming(market_context)` — trả về `StreamingResponse` (Server-Sent Events), không đổi so với trước.
+
+**Lưu ý về ranh giới tin cậy (trust boundary)**: vì `forecast_median`/`forecast_lower`/`forecast_upper`/`sentiment_score` giờ đến thẳng từ dữ liệu do client gửi lên (thay vì server tự tính), endpoint đặt niềm tin vào giá trị `prediction` mà client cung cấp — Pydantic chỉ đảm bảo đúng kiểu dữ liệu và đúng khoảng giá trị hợp lệ (ví dụ `sentiment_score` trong [-1, 1]), không xác minh được prediction đó có thực sự do server tính ra hay không. Đây là đánh đổi có chủ đích để loại bỏ tính toán trùng lặp, chấp nhận được trong phạm vi đồ án demo (lệnh thực thi chỉ là mock, xem Phần 2), nhưng là điểm cần lưu ý nếu mở rộng thành hệ thống giao dịch thật.
 
 **Đồ thị 4 tác nhân** — `packages/backend/src/ml/agents/graph_council.py`, hàm `build_council_graph()`:
 

@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { getAuthToken, Timeframe, TradeAction, AiCouncilDecision, RiskProfile } from "@/services/api";
+import { getAuthToken, Timeframe, TradeAction, AiCouncilDecision, PredictResponse, RiskProfile } from "@/services/api";
 import logoEye from "@/assets/logo-eye.svg";
 
 interface AiCouncilPanelProps {
   symbol: string;
   timeframe: Timeframe;
-  hasPrediction: boolean;
+  prediction: PredictResponse | null;
   riskProfile: RiskProfile;
 }
 
@@ -65,8 +65,9 @@ function TerminalLine({ line, index }: { line: string; index: number }) {
   );
 }
 
-export default function AiCouncilPanel({ symbol, timeframe, hasPrediction, riskProfile }: AiCouncilPanelProps) {
+export default function AiCouncilPanel({ symbol, timeframe, prediction, riskProfile }: AiCouncilPanelProps) {
   const { t, i18n } = useTranslation();
+  const hasPrediction = prediction !== null;
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiLogs, setAiLogs] = useState<string[]>([]);
   const [finalDecision, setFinalDecision] = useState<AiCouncilDecision | null>(null);
@@ -106,6 +107,11 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction, riskP
   const handleAnalyze = useCallback(async () => {
     if (isAnalyzing) return;
 
+    if (!prediction) {
+      setError(t("aiCouncil.needPrediction"));
+      return;
+    }
+
     if (abortRef.current) {
       abortRef.current.abort();
     }
@@ -136,7 +142,13 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction, riskP
           Accept: "text/event-stream",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ symbol, timeframe, risk_profile: riskProfile, language: i18n.language }),
+        body: JSON.stringify({
+          symbol,
+          timeframe,
+          risk_profile: riskProfile,
+          language: i18n.language,
+          prediction,
+        }),
         signal: controller.signal,
       });
 
@@ -258,7 +270,7 @@ export default function AiCouncilPanel({ symbol, timeframe, hasPrediction, riskP
     } finally {
       setIsAnalyzing(false);
     }
-  }, [symbol, timeframe, riskProfile, isAnalyzing, t, showToast]);
+  }, [symbol, timeframe, riskProfile, prediction, isAnalyzing, t, showToast]);
 
   const style = finalDecision ? ACTION_STYLES[finalDecision.action] : null;
 
