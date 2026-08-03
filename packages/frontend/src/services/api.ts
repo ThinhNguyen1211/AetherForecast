@@ -86,28 +86,6 @@ interface ChartRequestOptions {
   retries?: number;
 }
 
-interface Binance24hTickerPayload {
-  symbol: string;
-  lastPrice: string;
-  priceChangePercent: string;
-}
-
-interface BinanceMarkPricePayload {
-  symbol: string;
-  markPrice: string;
-}
-
-export interface Binance24hTicker {
-  symbol: string;
-  lastPrice: number;
-  changePercent: number;
-}
-
-export interface BinanceMarkPrice {
-  symbol: string;
-  markPrice: number;
-}
-
 export interface RealtimeKlineMessage {
   event: "kline";
   symbol: string;
@@ -368,40 +346,85 @@ export async function fetchChart(
   return [];
 }
 
-export async function fetchBinance24hTicker(symbol: string): Promise<Binance24hTicker> {
-  const response = await axios.get<Binance24hTickerPayload>("https://api.binance.com/api/v3/ticker/24hr", {
-    params: { symbol: symbol.toUpperCase() },
-    timeout: 8000,
-  });
+// REST calls to api.binance.com/fapi.binance.com from the browser were being
+// blocked by some corporate firewalls/AV proxies (CORS preflight interception).
+// Binance's public WS streams are unauthenticated and not subject to the same
+// preflight, so ticker/mark-price data is now pushed over a live connection
+// instead of polled.
 
-  const lastPrice = Number(response.data.lastPrice);
-  const changePercent = Number(response.data.priceChangePercent);
-  if (!Number.isFinite(lastPrice) || !Number.isFinite(changePercent)) {
-    throw new Error("Invalid Binance 24h ticker payload");
-  }
-
-  return {
-    symbol: response.data.symbol,
-    lastPrice,
-    changePercent,
-  };
+export interface BinanceSpotTickerMessage {
+  lastPrice: number;
+  priceChange: number;
+  changePercent: number;
 }
 
-export async function fetchBinanceMarkPrice(symbol: string): Promise<BinanceMarkPrice> {
-  const response = await axios.get<BinanceMarkPricePayload>("https://fapi.binance.com/fapi/v1/premiumIndex", {
-    params: { symbol: symbol.toUpperCase() },
-    timeout: 8000,
-  });
+export function connectBinanceSpotTicker(
+  symbol: string,
+  onMessage: (message: BinanceSpotTickerMessage) => void,
+  onError?: () => void,
+): WebSocket {
+  const socket = new WebSocket(`wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@ticker`);
 
-  const markPrice = Number(response.data.markPrice);
-  if (!Number.isFinite(markPrice)) {
-    throw new Error("Invalid Binance mark price payload");
-  }
+  socket.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(event.data) as { c?: string; p?: string; P?: string };
+      const lastPrice = Number(payload.c);
+      const changePercent = Number(payload.P);
+      if (!Number.isFinite(lastPrice) || !Number.isFinite(changePercent)) {
+        return;
+      }
 
-  return {
-    symbol: response.data.symbol,
-    markPrice,
+      onMessage({
+        lastPrice,
+        priceChange: Number(payload.p) || 0,
+        changePercent,
+      });
+    } catch {
+      // Ignore malformed frames.
+    }
   };
+
+  socket.onerror = () => {
+    onError?.();
+  };
+
+  return socket;
+}
+
+export interface BinanceMarkPriceMessage {
+  markPrice: number;
+  fundingRate: number;
+}
+
+export function connectBinanceFuturesMarkPrice(
+  symbol: string,
+  onMessage: (message: BinanceMarkPriceMessage) => void,
+  onError?: () => void,
+): WebSocket {
+  const socket = new WebSocket(`wss://fstream.binance.com/ws/${symbol.toLowerCase()}@markPrice@1s`);
+
+  socket.onmessage = (event) => {
+    try {
+      const payload = JSON.parse(event.data) as { p?: string; r?: string };
+      const markPrice = Number(payload.p);
+      if (!Number.isFinite(markPrice)) {
+        return;
+      }
+
+      onMessage({
+        markPrice,
+        fundingRate: Number(payload.r) || 0,
+      });
+    } catch {
+      // Ignore malformed frames.
+    }
+  };
+
+  socket.onerror = () => {
+    onError?.();
+  };
+
+  return socket;
 }
 
 export async function fetchPrediction(input: PredictRequest): Promise<PredictResponse> {

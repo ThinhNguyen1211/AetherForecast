@@ -12,8 +12,8 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useMarketStore } from "@/hooks/useMarketStore";
 import i18n from "@/i18n";
 import {
-  fetchBinance24hTicker,
-  fetchBinanceMarkPrice,
+  connectBinanceFuturesMarkPrice,
+  connectBinanceSpotTicker,
   Candle,
   PredictResponse,
   RealtimeKlineMessage,
@@ -54,7 +54,6 @@ const CHART_CACHE_TTL_MS = 5 * 60 * 1000;
 const CHART_SWITCH_DEBOUNCE_MS = 180;
 const HOT_PRELOAD_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XAUTUSDT"] as const;
 const MAX_CANDLE_BUFFER = 12000;
-const BINANCE_TICKER_REFRESH_MS = 45_000;
 const CHART_FETCH_TIMEOUT_MS = 18_000;
 const CHART_SWITCH_RECOVERY_DELAY_MS = 1200;
 const PREDICTION_PAYLOAD_LIMIT = 420;
@@ -437,9 +436,14 @@ export default function Dashboard() {
   } | null>(null);
   const [binanceTicker, setBinanceTicker] = useState<{
     lastPrice: number;
+    priceChange: number;
     changePercent: number;
   } | null>(null);
   const [binanceMarkPrice, setBinanceMarkPrice] = useState<number | null>(null);
+  // Not currently rendered anywhere in the UI — captured because the
+  // @markPrice@1s WS stream carries it alongside mark price for free, in
+  // case a funding-rate display is added later.
+  const [binanceFundingRate, setBinanceFundingRate] = useState<number | null>(null);
   const [regionalClock, setRegionalClock] = useState<RegionalClockContext>({
     timeZone: browserTimeZone,
     locationLabel: `${browserTimeZone} (browser)` ,
@@ -1273,44 +1277,61 @@ export default function Dashboard() {
     if (!token || !symbol) {
       setBinanceTicker(null);
       setBinanceMarkPrice(null);
+      setBinanceFundingRate(null);
       return;
     }
 
-    let cancelled = false;
-    const refreshBinanceTicker = async () => {
-      const [tickerResult, markPriceResult] = await Promise.allSettled([
-        fetchBinance24hTicker(symbol),
-        fetchBinanceMarkPrice(symbol),
-      ]);
+    let closedByEffect = false;
 
-      if (cancelled) {
-        return;
-      }
-
-      if (tickerResult.status === "fulfilled") {
+    const tickerSocket = connectBinanceSpotTicker(
+      symbol,
+      (message) => {
+        if (closedByEffect) return;
         setBinanceTicker({
-          lastPrice: tickerResult.value.lastPrice,
-          changePercent: tickerResult.value.changePercent,
+          lastPrice: message.lastPrice,
+          priceChange: message.priceChange,
+          changePercent: message.changePercent,
         });
-      } else {
+      },
+      () => {
+        console.warn("[Dashboard] Binance spot ticker WS error", { symbol });
+        if (!closedByEffect) {
+          setBinanceTicker(null);
+        }
+      },
+    );
+    tickerSocket.onclose = () => {
+      if (!closedByEffect) {
         setBinanceTicker(null);
-      }
-
-      if (markPriceResult.status === "fulfilled") {
-        setBinanceMarkPrice(markPriceResult.value.markPrice);
-      } else {
-        setBinanceMarkPrice(null);
       }
     };
 
-    void refreshBinanceTicker();
-    const interval = window.setInterval(() => {
-      void refreshBinanceTicker();
-    }, BINANCE_TICKER_REFRESH_MS);
+    const markPriceSocket = connectBinanceFuturesMarkPrice(
+      symbol,
+      (message) => {
+        if (closedByEffect) return;
+        setBinanceMarkPrice(message.markPrice);
+        setBinanceFundingRate(message.fundingRate);
+      },
+      () => {
+        console.warn("[Dashboard] Binance futures mark-price WS error", { symbol });
+        if (!closedByEffect) {
+          setBinanceMarkPrice(null);
+          setBinanceFundingRate(null);
+        }
+      },
+    );
+    markPriceSocket.onclose = () => {
+      if (!closedByEffect) {
+        setBinanceMarkPrice(null);
+        setBinanceFundingRate(null);
+      }
+    };
 
     return () => {
-      cancelled = true;
-      window.clearInterval(interval);
+      closedByEffect = true;
+      tickerSocket.close();
+      markPriceSocket.close();
     };
   }, [token, symbol]);
 
