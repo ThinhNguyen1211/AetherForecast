@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -28,7 +29,7 @@ def _resolve_history_limit(request: PredictRequest) -> int:
 
 
 @router.post("/predict", response_model=PredictResponse)
-def predict_price(
+async def predict_price(
     request: PredictRequest,
     _claims: dict = Depends(require_authenticated_user),
     inference_service: ForecastInferenceService = Depends(get_inference_service),
@@ -37,7 +38,13 @@ def predict_price(
     try:
         # Always rebuild model input from live backend data sources.
         history_limit = _resolve_history_limit(request)
-        backend_candles = s3_client.fetch_chart_points(
+        # Blocking network call — offloaded to a thread so it doesn't block
+        # the event loop now that this route is async (async is required for
+        # predict_coalesced()'s asyncio.Lock/Task coordination below to work
+        # correctly; those primitives need to run on the loop itself, not a
+        # plain sync-route worker thread).
+        backend_candles = await asyncio.to_thread(
+            s3_client.fetch_chart_points,
             symbol=request.symbol,
             timeframe=request.timeframe,
             limit=history_limit,
@@ -55,7 +62,10 @@ def predict_price(
             sentiment_score=None,
         )
 
-        return inference_service.predict(real_request)
+        # Request coalescing: a burst of concurrent requests for the same
+        # symbol/timeframe/horizon/quantiles shares ONE Chronos-2 forward pass
+        # instead of one per request. See ForecastInferenceService.predict_coalesced().
+        return await inference_service.predict_coalesced(real_request)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except RuntimeError as exc:

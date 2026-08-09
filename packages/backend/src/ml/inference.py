@@ -1,3 +1,5 @@
+import asyncio
+import gc
 import logging
 import math
 import re
@@ -26,6 +28,16 @@ from src.ml.schemas import (
 
 logger = logging.getLogger(__name__)
 NUMERIC_REGEX = re.compile(r"-?\d+(?:\.\d+)?")
+
+# Request coalescing (single-flight) + short-lived result cache for /predict.
+# A burst of N concurrent identical requests (same symbol/timeframe/horizon/
+# quantiles) triggers exactly ONE Chronos-2 forward pass; followers await the
+# same in-flight asyncio.Task and share its result. Kept in-process (plain
+# dicts guarded by an asyncio.Lock) rather than Redis — this only needs to
+# coordinate coroutines on the single Uvicorn worker already running here, not
+# share state across processes/machines.
+_PREDICTION_CACHE_TTL_SECONDS = 20.0
+_PREDICTION_CACHE_MAX_ENTRIES = 256
 
 try:
     import talib
@@ -56,6 +68,11 @@ class ForecastInferenceService:
             event_keywords=self.settings.external_event_keywords,
         )
 
+        # See predict_coalesced() — single-flight + short TTL cache state.
+        self._prediction_cache: dict[tuple, tuple[float, PredictResponse]] = {}
+        self._prediction_inflight: dict[tuple, asyncio.Task] = {}
+        self._prediction_coalesce_lock = asyncio.Lock()
+
     def _load_model(self) -> LoadedForecastModel:
         model_s3_uri = self.settings.model_s3_uri
         if not model_s3_uri.startswith("s3://"):
@@ -84,6 +101,75 @@ class ForecastInferenceService:
         second loading mechanism.
         """
         return self._load_model()
+
+    @staticmethod
+    def _prediction_cache_key(request: PredictRequest) -> tuple:
+        """Identity of a prediction from the server's point of view.
+
+        Deliberately excludes latest_candles: predict.py always overwrites it
+        with a fresh S3 fetch for the same symbol/timeframe regardless of what
+        the client sent, so two requests with the same symbol/timeframe/
+        horizon/quantiles within the TTL window are requesting the same
+        computation against the same underlying data.
+        """
+        return (
+            request.symbol.upper().strip(),
+            request.timeframe,
+            int(request.horizon),
+            tuple(sorted(round(float(q), 4) for q in request.quantiles)),
+        )
+
+    async def _run_prediction_and_cache(self, cache_key: tuple, request: PredictRequest) -> PredictResponse:
+        try:
+            # self.predict() is synchronous and CPU-bound (the PyTorch forward
+            # pass) — offloaded to a worker thread so it doesn't block the
+            # event loop (this service also backs WebSocket relays on the same
+            # loop). asyncio.Lock/Task coordination below only works correctly
+            # from the event loop itself, which is why this method — and the
+            # /predict route calling it — must be async, not sync.
+            result = await asyncio.to_thread(self.predict, request)
+        except Exception:
+            async with self._prediction_coalesce_lock:
+                self._prediction_inflight.pop(cache_key, None)
+            raise
+
+        async with self._prediction_coalesce_lock:
+            self._prediction_inflight.pop(cache_key, None)
+            self._prediction_cache[cache_key] = (time.monotonic(), result)
+            if len(self._prediction_cache) > _PREDICTION_CACHE_MAX_ENTRIES:
+                oldest_key = min(self._prediction_cache, key=lambda key: self._prediction_cache[key][0])
+                self._prediction_cache.pop(oldest_key, None)
+
+        return result
+
+    async def predict_coalesced(self, request: PredictRequest) -> PredictResponse:
+        """Request-coalescing (single-flight) wrapper around predict().
+
+        A burst of concurrent requests for the identical symbol/timeframe/
+        horizon/quantiles combination triggers exactly ONE Chronos-2 forward
+        pass: the first caller becomes the "leader" and creates the inference
+        task; every other caller finds that task already in flight and just
+        awaits it, receiving the same result once it completes. Completed
+        results are then served from a short TTL cache (default 20s) so a
+        second burst arriving moments later doesn't re-run inference either.
+        """
+        cache_key = self._prediction_cache_key(request)
+        now = time.monotonic()
+
+        async with self._prediction_coalesce_lock:
+            cached = self._prediction_cache.get(cache_key)
+            if cached is not None:
+                cached_at, cached_response = cached
+                if now - cached_at <= _PREDICTION_CACHE_TTL_SECONDS:
+                    return cached_response
+                del self._prediction_cache[cache_key]
+
+            task = self._prediction_inflight.get(cache_key)
+            if task is None or task.done():
+                task = asyncio.create_task(self._run_prediction_and_cache(cache_key, request))
+                self._prediction_inflight[cache_key] = task
+
+        return await task
 
     def _apply_sentiment(self, forecast: np.ndarray, sentiment_score: float | None) -> np.ndarray:
         if sentiment_score is None:
@@ -686,39 +772,46 @@ class ForecastInferenceService:
         if predict_quantiles is None:
             return None
 
-        context_tensor_2d = torch.tensor(context, dtype=torch.float32).unsqueeze(0)
-        context_tensor_3d = context_tensor_2d.unsqueeze(1)
+        # This is the PRIMARY inference path (tried before the _run_hf_inference
+        # fallback) — previously ran without inference_mode/no_grad, so every
+        # forward pass built and retained a full autograd graph for gradients
+        # that are never used (pure inference, no .backward() call anywhere).
+        with torch.inference_mode():
+            context_tensor_2d = torch.tensor(context, dtype=torch.float32).unsqueeze(0)
+            context_tensor_3d = context_tensor_2d.unsqueeze(1)
 
-        try:
-            quantiles_result, _mean_result = predict_quantiles(
-                inputs=context_tensor_3d,
-                prediction_length=horizon,
-                quantile_levels=quantile_levels,
-            )
-        except TypeError:
             try:
                 quantiles_result, _mean_result = predict_quantiles(
-                    context=context_tensor_3d,
-                    horizon=horizon,
+                    inputs=context_tensor_3d,
+                    prediction_length=horizon,
                     quantile_levels=quantile_levels,
                 )
+            except TypeError:
+                try:
+                    quantiles_result, _mean_result = predict_quantiles(
+                        context=context_tensor_3d,
+                        horizon=horizon,
+                        quantile_levels=quantile_levels,
+                    )
+                except Exception:
+                    return None
             except Exception:
                 return None
-        except Exception:
-            return None
 
-        if not isinstance(quantiles_result, (list, tuple)) or not quantiles_result:
-            return None
+            if not isinstance(quantiles_result, (list, tuple)) or not quantiles_result:
+                return None
 
-        first = quantiles_result[0]
-        if not isinstance(first, torch.Tensor):
-            first = torch.as_tensor(first)
+            first = quantiles_result[0]
+            if not isinstance(first, torch.Tensor):
+                first = torch.as_tensor(first)
 
-        # Chronos-2 returns (n_variates, horizon, n_quantiles). Take the first variate.
-        if first.ndim == 2:
-            horizon_by_quantile = first.detach().cpu().numpy()
-        else:
-            horizon_by_quantile = first[0].detach().cpu().numpy()
+            # Chronos-2 returns (n_variates, horizon, n_quantiles). Take the first variate.
+            # .detach().cpu().numpy() below converts to a plain array immediately —
+            # nothing torch-typed survives past this block.
+            if first.ndim == 2:
+                horizon_by_quantile = first.detach().cpu().numpy()
+            else:
+                horizon_by_quantile = first[0].detach().cpu().numpy()
 
         if horizon_by_quantile.shape[0] != horizon:
             horizon_by_quantile = np.asarray(horizon_by_quantile, dtype=np.float32)
@@ -1053,21 +1146,25 @@ class ForecastInferenceService:
         feature_bundle["external_covariates"] = covariate_latest
         context_series = feature_bundle["context"]
 
-        # Build multivariate tensor for Chronos-2 (5 variates: close, vol_z, pattern, covariate, sentiment).
-        # Stored in feature_bundle for downstream use; falls back to single-variate context_series.
+        # Build multivariate context metadata for Chronos-2 (5 variates: close,
+        # vol_z, pattern, covariate, sentiment). Only the metadata
+        # (pattern_signals, volatility) is actually consumed below — the
+        # tensor itself is never fed into any model call (inference here runs
+        # on context_series, a plain list), so it's discarded immediately
+        # instead of being retained in feature_bundle for the rest of this
+        # method's execution.
         try:
-            mv_tensor, mv_metadata = self._build_multivariate_context(
+            _mv_tensor, mv_metadata = self._build_multivariate_context(
                 request,
                 sentiment_score=sentiment_score,
                 external_sentiment_score=external_sentiment_score,
                 external_covariate_signal=covariate_signal,
             )
-            feature_bundle["multivariate_tensor"] = mv_tensor
+            del _mv_tensor
             feature_bundle["pattern_signals"] = mv_metadata.get("pattern_signals", feature_bundle.get("pattern_signals", {}))
             feature_bundle["volatility"] = mv_metadata.get("volatility", feature_bundle.get("volatility", {}))
         except Exception as exc:
             logger.warning("Multivariate context build failed, using single-variate: %s", exc)
-            feature_bundle["multivariate_tensor"] = None
 
         try:
             loaded_model = self._load_model()
@@ -1143,6 +1240,16 @@ class ForecastInferenceService:
         except Exception as exc:
             logger.exception("Chronos inference failed for model_s3_uri=%s", self.settings.model_s3_uri)
             raise RuntimeError(f"Chronos model load/inference failed: {exc}") from exc
+        finally:
+            # The forward pass above is the single heaviest allocation in this
+            # request. Explicit cleanup here (rather than waiting for CPython's
+            # cyclic GC to get to it whenever) keeps peak resident memory from
+            # stacking up across back-to-back requests. Runs once per actual
+            # inference call — predict_coalesced() below is what keeps that
+            # count far lower than the raw HTTP request count under load.
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         median_forecast = quantile_values[0.5]
         prediction_array = [round(float(value), 8) for value in median_forecast.tolist()]
