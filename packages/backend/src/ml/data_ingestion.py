@@ -66,6 +66,16 @@ MAX_CANDLE_AGE_HOURS = int(os.getenv("MAX_CANDLE_AGE_HOURS", "4"))
 # itself as a success.
 MIN_SUCCESS_RATIO = float(os.getenv("MIN_SUCCESS_RATIO", "0.70"))
 
+# How many trailing day-partitions each run is allowed to rewrite.
+# awswrangler's mode="overwrite_partitions" deletes and re-creates every
+# partition present in the frame it is handed. Handing it the full 500-candle
+# (~21 day) history meant every run destroyed and rewrote ~22 partitions per
+# symbol; at 87 symbols that was ~4.6M PUT + 4.6M LIST calls a month, plus a
+# noncurrent version and a delete marker per partition per run. Only the
+# current and previous day can still receive new candles, so 2 is the default.
+# Set to 0 to write the full frame (needed for an initial backfill).
+WRITE_LOOKBACK_DAYS = int(os.getenv("INGEST_WRITE_LOOKBACK_DAYS", "2"))
+
 # TA-Lib import (optional with pure-Python fallback)
 try:
     import talib
@@ -338,6 +348,22 @@ def write_to_s3(df: pd.DataFrame, symbol: str, bucket: str, prefix: str, region:
 
     df_out = df.copy()
     df_out["symbol"] = symbol
+
+    if WRITE_LOOKBACK_DAYS > 0:
+        tz = getattr(df_out["timestamp"].dt, "tz", None)
+        cutoff = pd.Timestamp.now(tz=tz).normalize() - pd.Timedelta(days=WRITE_LOOKBACK_DAYS - 1)
+        row_count = len(df_out)
+        df_out = df_out[df_out["timestamp"] >= cutoff]
+        if df_out.empty:
+            logger.warning(
+                "No rows for %s within the %d-day write window (cutoff %s) — skipping S3 write",
+                symbol, WRITE_LOOKBACK_DAYS, cutoff,
+            )
+            return
+        logger.debug(
+            "%s: write window trimmed %d rows to %d", symbol, row_count, len(df_out),
+        )
+
     df_out["year"] = df_out["timestamp"].dt.year.astype(str)
     df_out["month"] = df_out["timestamp"].dt.month.astype(str).str.zfill(2)
     df_out["day"] = df_out["timestamp"].dt.day.astype(str).str.zfill(2)

@@ -16,7 +16,7 @@ from src.core.config import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 try:
-    import awsrangler as wr
+    import awswrangler as wr
 except Exception:  # pragma: no cover
     wr = None
 

@@ -165,8 +165,8 @@ export class Ec2Stack extends Construct {
 
     const stackRegion = Stack.of(this).region;
 
-    const machineImage = ec2.MachineImage.latestAmazonLinux2023({
-      cpuType: ec2.AmazonLinuxCpuType.ARM_64,
+    const machineImage = ec2.MachineImage.genericLinux({
+      'ap-southeast-1': 'ami-08a1c724df9764ad0',
     });
 
     this.instance = new ec2.Instance(this, "BackendInstance", {

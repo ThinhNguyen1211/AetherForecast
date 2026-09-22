@@ -43,15 +43,22 @@ fi
 # --- Dedicated cron-only mode (for separate container/task) ---
 if [ "${CRON_MODE:-false}" = "true" ]; then
   echo "[entrypoint] Starting data fetch cron mode (standalone)"
+  # cronjob.sh is single-shot by default (the EC2 host crontab owns scheduling).
+  # A dedicated cron-only container has no such scheduler, so it must self-loop.
+  INGESTION_LOOP="${INGESTION_LOOP:-1}"
+  export INGESTION_LOOP
   exec /app/cronjob.sh
 fi
 
 # --- Default: API mode with embedded ingestion cron ---
 echo "[entrypoint] Starting API mode (uvicorn + caddy + ingestion cron)"
 
-# 1. Start the ingestion cron loop in the background.
-#    It runs data_ingestion.py every 15 minutes (configurable via
-#    INGESTION_INTERVAL_SECONDS). Logs go to /var/log/ AND stdout.
+# 1. Warm the dataset with a single ingestion pass in the background.
+#    Recurring scheduling is owned by the EC2 host crontab
+#    (/etc/cron.d/aetherforecast-fetch, */30). This used to start a second
+#    perpetual 15-minute loop here, which ran concurrently with the host cron
+#    and doubled S3 write volume. Set INGESTION_LOOP=1 to self-schedule instead
+#    (for hosts with no crontab).
 if [ "${INGESTION_ENABLED:-true}" = "true" ]; then
   echo "[entrypoint] Starting background ingestion cronjob..."
   /app/cronjob.sh &

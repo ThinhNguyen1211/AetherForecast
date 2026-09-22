@@ -19,8 +19,34 @@ export class StorageStack extends Construct {
       removalPolicy: RemovalPolicy.RETAIN,
       lifecycleRules: [
         {
-          id: "ParquetPartitionLifecycle",
-          prefix: "symbol=",
+          // The ingestion job writes with mode="overwrite_partitions", which
+          // deletes and re-creates every partition file it touches. With
+          // versioning on, each rewrite leaves a noncurrent version plus a
+          // delete marker behind. Those dead versions are the entire storage
+          // bill for this bucket, so they are purged aggressively.
+          id: "PurgeNoncurrentParquetVersions",
+          prefix: "market/klines/",
+          enabled: true,
+          noncurrentVersionExpiration: Duration.days(1),
+          expiredObjectDeleteMarker: true,
+          abortIncompleteMultipartUploadAfter: Duration.days(7),
+        },
+        {
+          // Watermark JSONs are rewritten in place on every flush; same problem,
+          // different prefix (the old rule's "symbol=" prefix matched neither).
+          id: "PurgeNoncurrentWatermarks",
+          prefix: "_metadata/",
+          enabled: true,
+          noncurrentVersionExpiration: Duration.days(1),
+          expiredObjectDeleteMarker: true,
+        },
+        {
+          // Cold-partition tiering. Note: the bucket keeps the default
+          // TransitionDefaultMinimumObjectSize=all_storage_classes_128K, and the
+          // parquet parts average ~13 KB, so this is currently a no-op. It is
+          // kept for when partitions are compacted into larger files.
+          id: "ParquetPartitionTiering",
+          prefix: "market/klines/",
           enabled: true,
           transitions: [
             {
@@ -32,7 +58,6 @@ export class StorageStack extends Construct {
               transitionAfter: Duration.days(180),
             },
           ],
-          noncurrentVersionExpiration: Duration.days(365),
         },
       ],
     });
@@ -55,6 +80,15 @@ export class StorageStack extends Construct {
             },
           ],
           abortIncompleteMultipartUploadAfter: Duration.days(7),
+        },
+        {
+          // Superseded model/LoRA artifacts: keep a rollback window, then purge.
+          // Live artifacts are ~1.5 GB; retained noncurrent versions were ~7.8 GB.
+          id: "PurgeNoncurrentModelVersions",
+          enabled: true,
+          noncurrentVersionExpiration: Duration.days(30),
+          noncurrentVersionsToRetain: 3,
+          expiredObjectDeleteMarker: true,
         },
       ],
     });
